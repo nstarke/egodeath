@@ -4,7 +4,7 @@ var recast = require('recast');
 var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();
-
+var isVarName = require('is-valid-var-name');
 var keywords = [
   'Array',
   'console',
@@ -59,9 +59,39 @@ var keywords = [
   'process'
 ];
 
+
+Array.prototype.choose = function (){
+  return this[(crypto.randomBytes(1))[0] % this.length];
+}
+
+function ensureNotKeyword(testee){
+  var brk = false;
+  if (keywords.indexOf(testee.name) !== -1) brk = true;
+    if (!brk) {
+      keywords.forEach(function(keyword){
+        var evald = eval(keyword);
+        if (evald[testee.name]) brk = true;
+        if (findKey(evald, testee.name)) {
+          brk = true;
+        }
+        if (!brk && evald.prototype) {
+          try {
+            if (evald.prototype[testee.name]){
+              brk = true;
+            }
+          } catch (ex){
+  
+          }
+        }
+      })
+    }
+    return brk;
+}
+
 var globals = {};
 function findKey(object, key) {
   var value = false;
+  if (!object) return true;
   Object.keys(object).some(function(k) {
       if (k === key) {
           value = true;
@@ -81,101 +111,123 @@ var handlers = {
   ObjectExpression: function (node) {
   },
   Property: function (node) {
-    if (globals[node.key.name]) {
-      node.key.name = globals[node.key.name];
-    } else {
-      var replacement = gen();
-      globals[node.key.name] = replacement;
-      node.key.name = replacement;
+    var brk = ensureNotKeyword(node.key);
+    if (!brk) {
+      if (globals[node.key.name]) {
+        node.key.name = globals[node.key.name];
+      } else {
+        var replacement = gen();
+        globals[node.key.name] = replacement;
+        node.key.name = replacement;
+      }
     }
   },
   BlockStatement: function (node) {
   },
   BinaryExpression: function(node) {
-    if (globals[node.left.name]) {
-      node.left.name = globals[node.left.name];
-    } else {
-      var replacement = gen();
-      globals[node.left.name] = replacement;
-      node.left.name = replacement;
+    var brk = ensureNotKeyword(node.left);
+    if (!brk) {
+      if (globals[node.left.name]) {
+        node.left.name = globals[node.left.name];
+      } else {
+        var replacement = gen();
+        globals[node.left.name] = replacement;
+        node.left.name = replacement;
+      }
     }
-    if (globals[node.right.name]) {
-      node.right.name = globals[node.right.name];
-    } else {
-      var replacement = gen();
-      globals[node.right.name] = replacement;
-      node.right.name = replacement;
+    brk = ensureNotKeyword(node.right);
+    if (!brk){
+      if (globals[node.right.name]) {
+        node.right.name = globals[node.right.name];
+      } else {
+        var replacement = gen();
+        globals[node.right.name] = replacement;
+        node.right.name = replacement;
+      }
     }
   },
   Identifier: function(node, parent) {
     // not enough context to
   },
   VariableDeclarator: function(node){
-    if (globals[node.id.name]) {
-      node.id.name = globals[node.id.name];
-    } else {
-      var replacement = gen();
-      globals[node.id.name] = replacement;
-      node.id.name = replacement;
+    var brk = ensureNotKeyword(node.id);
+    if (!brk) {
+      if (globals[node.id.name]) {
+        node.id.name = globals[node.id.name];
+      } else {
+        var replacement = gen();
+        globals[node.id.name] = replacement;
+        node.id.name = replacement;
+      }
+    }
+    brk = ensureNotKeyword(node.init);
+    if (!brk){
+      if (globals[node.init.name]) {
+        node.init.name = globals[node.init.name];
+      } else {
+        var replacement = gen();
+        globals[node.init.name] = replacement;
+        node.init.name = replacement;
+      }
     }
   },
   CallExpression: function(node){
-    if (globals[node.callee.name]) {
-      node.callee.name = globals[node.callee.name];
-    } else {
-      var replacement = gen();
-      globals[node.callee.name] = replacement;
-      node.callee.name = replacement;
-    }
-    node.arguments.forEach(function(arg){
-      if (globals[arg.name]) {
-        arg.name = globals[arg.name];
+    var brk = ensureNotKeyword(node.callee);
+    if (!brk) {
+      if (globals[node.callee.name]) {
+        node.callee.name = globals[node.callee.name];
       } else {
         var replacement = gen();
-        globals[arg.name] = replacement;
-        arg.name = replacement;
+        globals[node.callee.name] = replacement;
+        node.callee.name = replacement;
+      }
+    }
+   
+    node.arguments.forEach(function(arg){
+      brk = ensureNotKeyword(arg);
+      if (!brk){
+        if (globals[arg.name]) {
+          arg.name = globals[arg.name];
+        } else {
+          var replacement = gen();
+          globals[arg.name] = replacement;
+          arg.name = replacement;
+        }
       }
     })
   },
   FunctionExpression: function (node) {
     node.params.forEach(function(param){
-      if (globals[param.name]) {
-        param.name = globals[param.name];
-      } else {
-        var replacement = gen();
-        globals[param.name] = replacement;
-        param.name = replacement;
+      var brk = ensureNotKeyword(param);
+      if (!brk) {
+        if (globals[param.name]) {
+          param.name = globals[param.name];
+        } else {
+          var replacement = gen();
+          globals[param.name] = replacement;
+          param.name = replacement;
+        }
       }
     })
   },
   ReturnStatement: function(node) {
     if (!node.argument) return;
-    if (globals[node.argument.name]) {
-      node.argument.name = globals[node.argument.name];
-    } else {
-      var replacement = gen();
-      globals[node.argument.name] = replacement;
-      node.argument.name = replacement;
+    var brk = ensureNotKeyword(node.argument);
+    if (!brk) {
+      if (globals[node.argument.name]) {
+        node.argument.name = globals[node.argument.name];
+      } else {
+        var replacement = gen();
+        globals[node.argument.name] = replacement;
+        node.argument.name = replacement;
+      }
     }
   },
   MemberExpression: function (node, parent) {
     var brk = false;
-    keywords.forEach(function(keyword){
-      var evald = eval(keyword);
-      if (findKey(evald, node.object.name)) {
-        brk = true;
-      }
-      if (evald.prototype && !brk) {
-        try {
-          if (evald.prototype[node.object.name]){
-            brk = true;
-          }
-        } catch (ex){
-
-        }
-      }
-    })
-    if (keywords.indexOf(node.object.name) !== -1) brk = true;
+    
+    brk = ensureNotKeyword(node.object);
+    
     if (!brk) {
       if (globals[node.object.name]) {
         node.object.name = globals[node.object.name];
@@ -185,23 +237,9 @@ var handlers = {
         node.object.name = replacement;
       }
     }
-    brk = false;
-    keywords.forEach(function(keyword){
-      var evald = eval(keyword);
-      if (findKey(evald, node.property.name)) {
-        brk = true;
-      }
-      if (evald.prototype && !brk) {
-        try {
-          if (evald.prototype[node.property.name]){
-            brk = true;
-          }
-        } catch (ex) {
-
-        }
-      }
-    })
-    if (keywords.indexOf(node.property.name) !== -1) brk = true;
+    
+    brk = ensureNotKeyword(node.property);
+   
     if (!brk) {
       if (globals[node.property.name]) {
         node.property.name = globals[node.property.name];
@@ -217,69 +255,91 @@ var handlers = {
   ExpressionStatement: function (node) {
   },
   AssignmentExpression: function (node) {
-    if (globals[node.left.name]) {
-      node.left.name = globals[node.left.name];
-    } else {
-      var replacement = gen();
-      globals[node.left.name] = replacement;
-      node.left.name = replacement;
+    var brk = ensureNotKeyword(node.left);
+    if (!brk) {
+      if (globals[node.left.name]) {
+        node.left.name = globals[node.left.name];
+      } else {
+        var replacement = gen();
+        globals[node.left.name] = replacement;
+        node.left.name = replacement;
+      }
     }
-    if (globals[node.right.name]) {
-      node.right.name = globals[node.right.name];
-    } else {
-      var replacement = gen();
-      globals[node.right.name] = replacement;
-      node.right.name = replacement;
+    brk = ensureNotKeyword(node.right);
+    if (!brk) {
+      if (globals[node.right.name]) {
+        node.right.name = globals[node.right.name];
+      } else {
+        var replacement = gen();
+        globals[node.right.name] = replacement;
+        node.right.name = replacement;
+      }
     }
   },
   FunctionDeclaration: function (node) {
-    if (globals[node.id.name]) {
-      node.id.name = globals[node.id.name];
-    } else {
-      var replacement = gen();
-      globals[node.id.name] = replacement;
-      node.id.name = replacement;
-    }
-    node.params.forEach(function(param){
-      if (globals[param.name]) {
-        param.name = globals[param.name];
+    var brk = ensureNotKeyword(node.id);
+    if (!brk) {
+      if (globals[node.id.name]) {
+        node.id.name = globals[node.id.name];
       } else {
         var replacement = gen();
-        globals[param.name] = replacement;
-        param.name = replacement;
+        globals[node.id.name] = replacement;
+        node.id.name = replacement;
+      }
+    }
+    brk = false;
+    node.params.forEach(function(param){
+      brk = ensureNotKeyword(param.name);
+      if (!brk) {
+        if (globals[param.name]) {
+          param.name = globals[param.name];
+        } else {
+          var replacement = gen();
+          globals[param.name] = replacement;
+          param.name = replacement;
+        }
       }
     })
   },
   IfStatement: function (node) {
-    if (globals[node.test.name]) {
-      node.test.name = globals[node.test.name];
-    } else {
-      var replacement = gen();
-      globals[node.test.name] = replacement;
-      node.test.name = replacement;
+    var brk = ensureNotKeyword(node.test);
+    if (!brk){
+      if (globals[node.test.name]) {
+        node.test.name = globals[node.test.name];
+      } else {
+        var replacement = gen();
+        globals[node.test.name] = replacement;
+        node.test.name = replacement;
+      }
     }
   },
   UnaryExpression: function (node) {
-    if (globals[node.argument.name]) {
-      node.argument.name = globals[node.argument.name];
-    } else {
-      var replacement = gen();
-      globals[node.argument.name] = replacement;
-      node.argument.name = replacement;
-    } 
+    var brk = ensureNotKeyword(node.argument);
+    if (!brk) {
+      if (globals[node.argument.name]) {
+        node.argument.name = globals[node.argument.name];
+      } else {
+        var replacement = gen();
+        globals[node.argument.name] = replacement;
+        node.argument.name = replacement;
+      } 
+    }
   },
   SwitchCase: function (node, parent) {
     
   },
   SwitchStatement: function (node) {
     if (!node.discriminant) return;
-    if (globals[node.discriminant.name]) {
-      node.discriminant.name = globals[node.discriminant.name];
-    } else {
-      var replacement = gen();
-      globals[node.discriminant.name] = replacement;
-      node.discriminant.name = replacement;
-    } 
+    var brk = ensureNotKeyword(node.discriminant);
+    if (!brk) {
+      if (globals[node.discriminant.name]) {
+        node.discriminant.name = globals[node.discriminant.name];
+      } else {
+        var replacement = gen();
+        globals[node.discriminant.name] = replacement;
+        node.discriminant.name = replacement;
+      } 
+    }
   }
 }
 
@@ -298,7 +358,18 @@ estraverse.traverse(ast.program, {
 });
 
 function gen() {
-  return '_'.repeat((crypto.randomBytes(1)[0] % 16) + 1) + crypto.randomBytes((crypto.randomBytes(1)[0] % 16) + 1).toString('hex');
+  var len = (crypto.randomBytes(1)[0] % 16) + 1
+  var start ="";
+  
+  for (var i = 0; i < len; i++){
+    var val = "1";
+    while (!isVarName(val)){
+       val = String.fromCharCode(parseInt(crypto.randomBytes(2).toString('hex'), 16))
+    }
+      start += val;
+  }
+ 
+  return start;
 }
 
 ast.program.body = used.concat(ast.program.body);
