@@ -160,14 +160,16 @@ var handlers = {
         node.id.name = replacement;
       }
     }
-    brk = ensureNotKeyword(node.init);
-    if (!brk){
-      if (globals[node.init.name]) {
-        node.init.name = globals[node.init.name];
-      } else {
-        var replacement = gen();
-        globals[node.init.name] = replacement;
-        node.init.name = replacement;
+    if (node.init){
+      brk = ensureNotKeyword(node.init);
+      if (!brk){
+        if (globals[node.init.name]) {
+          node.init.name = globals[node.init.name];
+        } else {
+          var replacement = gen();
+          globals[node.init.name] = replacement;
+          node.init.name = replacement;
+        }
       }
     }
   },
@@ -358,7 +360,7 @@ estraverse.traverse(ast.program, {
 });
 
 function gen() {
-  var len = (crypto.randomBytes(1)[0] % 16) + 1
+  var len = (crypto.randomBytes(1)[0] % 24) + 1
   var start ="";
   
   for (var i = 0; i < len; i++){
