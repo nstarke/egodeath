@@ -66,6 +66,7 @@ Array.prototype.choose = function (){
 
 function ensureNotKeyword(testee){
   var brk = false;
+  if ((testee.name) === 'undefined') return true;
   if (keywords.indexOf(testee.name) !== -1) brk = true;
     if (!brk) {
       keywords.forEach(function(keyword){
@@ -111,14 +112,16 @@ var handlers = {
   ObjectExpression: function (node) {
   },
   Property: function (node) {
-    var brk = ensureNotKeyword(node.key);
-    if (!brk) {
-      if (globals[node.key.name]) {
-        node.key.name = globals[node.key.name];
-      } else {
-        var replacement = gen();
-        globals[node.key.name] = replacement;
-        node.key.name = replacement;
+    if (node.key) {
+      var brk = ensureNotKeyword(node.key);
+      if (!brk) {
+        if (globals[node.key.name]) {
+          node.key.name = globals[node.key.name];
+        } else {
+          var replacement = gen();
+          globals[node.key.name] = replacement;
+          node.key.name = replacement;
+        }
       }
     }
   },
@@ -126,23 +129,28 @@ var handlers = {
   },
   BinaryExpression: function(node) {
     var brk = ensureNotKeyword(node.left);
-    if (!brk) {
-      if (globals[node.left.name]) {
-        node.left.name = globals[node.left.name];
-      } else {
-        var replacement = gen();
-        globals[node.left.name] = replacement;
-        node.left.name = replacement;
+    if (node.left){
+      if (!brk) {
+        if (globals[node.left.name]) {
+          node.left.name = globals[node.left.name];
+        } else {
+          var replacement = gen();
+          globals[node.left.name] = replacement;
+          node.left.name = replacement;
+        }
       }
     }
+    
     brk = ensureNotKeyword(node.right);
-    if (!brk){
-      if (globals[node.right.name]) {
-        node.right.name = globals[node.right.name];
-      } else {
-        var replacement = gen();
-        globals[node.right.name] = replacement;
-        node.right.name = replacement;
+    if (node.right){
+      if (!brk){
+        if (globals[node.right.name]) {
+          node.right.name = globals[node.right.name];
+        } else {
+          var replacement = gen();
+          globals[node.right.name] = replacement;
+          node.right.name = replacement;
+        }
       }
     }
   },
@@ -150,16 +158,19 @@ var handlers = {
     // not enough context to
   },
   VariableDeclarator: function(node){
-    var brk = ensureNotKeyword(node.id);
-    if (!brk) {
-      if (globals[node.id.name]) {
-        node.id.name = globals[node.id.name];
-      } else {
-        var replacement = gen();
-        globals[node.id.name] = replacement;
-        node.id.name = replacement;
+    if (node.id) {
+      var brk = ensureNotKeyword(node.id);
+      if (!brk) {
+        if (globals[node.id.name]) {
+          node.id.name = globals[node.id.name];
+        } else {
+          var replacement = gen();
+          globals[node.id.name] = replacement;
+          node.id.name = replacement;
+        }
       }
     }
+    
     if (node.init){
       brk = ensureNotKeyword(node.init);
       if (!brk){
@@ -175,25 +186,29 @@ var handlers = {
   },
   CallExpression: function(node){
     var brk = ensureNotKeyword(node.callee);
-    if (!brk) {
-      if (globals[node.callee.name]) {
-        node.callee.name = globals[node.callee.name];
-      } else {
-        var replacement = gen();
-        globals[node.callee.name] = replacement;
-        node.callee.name = replacement;
-      }
-    }
-   
-    node.arguments.forEach(function(arg){
-      brk = ensureNotKeyword(arg);
-      if (!brk){
-        if (globals[arg.name]) {
-          arg.name = globals[arg.name];
+    if (node.callee){
+      if (!brk) {
+        if (globals[node.callee.name]) {
+          node.callee.name = globals[node.callee.name];
         } else {
           var replacement = gen();
-          globals[arg.name] = replacement;
-          arg.name = replacement;
+          globals[node.callee.name] = replacement;
+          node.callee.name = replacement;
+        }
+      }
+    }
+    
+    node.arguments.forEach(function(arg){
+      brk = ensureNotKeyword(arg);
+      if (arg){
+        if (!brk){
+          if (globals[arg.name]) {
+            arg.name = globals[arg.name];
+          } else {
+            var replacement = gen();
+            globals[arg.name] = replacement;
+            arg.name = replacement;
+          }
         }
       }
     })
