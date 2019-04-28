@@ -53,7 +53,11 @@ var keywords = [
   'Promise',
   'Reflect',
   'Proxy',
-  'window'
+  'window',
+  'module',
+  'exports',
+  'require',
+  'process'
 ].forEach(function(item){
   var primaryKey = gen();
   var primaryCode  = 'var ' + primaryKey + ' = ' + item + ';\n';
@@ -66,7 +70,8 @@ var keywords = [
     props: {
     }
   }
-  Object.getOwnPropertyNames(eval(item)).forEach(function(sub){
+  var evald = eval(item);
+  Object.getOwnPropertyNames(evald).forEach(function(sub){
     var subkey = gen();
     var code = primaryKey + '.' + subkey + ' = ' + primaryKey + '.' + sub + ';\n';
     defaults[item].props[sub] = {
@@ -76,6 +81,19 @@ var keywords = [
       map: subkey,
       ast: recast.parse(code).program.body.pop()
     }
+    if (evald.prototype) {
+      Object.getOwnPropertyNames(evald.prototype).forEach(function(sub){
+        var subkey = gen();
+        var code = primaryKey + '.' + subkey + ' = ' + primaryKey + '.' + sub + ';\n';
+        defaults[item].props[sub] = {
+          key: sub,
+          used: false,
+          injected: false,
+          map: subkey,
+          ast: recast.parse(code).program.body.pop()
+        }
+        });
+    }
   })
 });
 
@@ -83,49 +101,16 @@ var globals = {};
 
 var handlers = {
   VariableDeclaration: function (node) {
-    var self = this;
-    node.declarations.forEach(function(dec){
-      if (self[dec.type]) {
-        self[dec.type](dec)
-      }
-    });
-    if (node.body && this[node.body.type]) this[node.body.type](node.body);
   },
   ObjectExpression: function (node) {
-    var self = this;
-    node.properties.forEach(function(prop){
-      if (self[prop.type]) self[prop.type](prop);
-    });
   },
   Property: function (node) {
-    if (this[node.key.type]) this[node.key.type](node.key);
-    if (this[node.value.type]) this[node.value.type](node.value);
   },
   BlockStatement: function (node) {
-    var self = this;
-      node.body.forEach(function(b){
-        if (self[b.type]) {
-          self[b.type](b);
-        }
-      })
   },
   BinaryExpression: function(node) {
-    if (this[node.left.type]) {
-      this[node.left.type](node.left);
-    }
-    if (this[node.right.type]) {
-      this[node.right.type](node.right);
-     }
   },
   Identifier: function(node) {
-    // if (defaults[node.name]) {
-    //   node.name = defaults[node.name].map;
-    //   return;
-    // }
-    // if (props[node.name]) {
-    //   node.name = props[node.name].map;
-    //   return;
-    // }
     if (globals[node.name]) {
         node.name = globals[node.name];
       } else {
@@ -135,23 +120,14 @@ var handlers = {
       }
   },
   VariableDeclarator: function(node){
-    if (this[node.init.type]) this[node.init.type](node.init);
-    if (this[node.id.type]) this[node.id.type](node.id);
-     // if (defaults[node.name]) {
-     //  node.name = defaults[node.name].map;
-     //  return
-    // }
-    // if (props[node.name]) {
-     //  node.name = props[node.name].map;
-     //  return;
-    // }
     if (globals[node.name]) {
         node.name = globals[node.name];
       } else {
         var replacement = gen();
         globals[node.name] = replacement;
         node.name = replacement;
-      }    if (globals[node.name]) {
+      }   
+       if (globals[node.name]) {
         node.name = globals[node.name];
       } else {
         var replacement = gen();
@@ -160,12 +136,6 @@ var handlers = {
       }
   },
   CallExpression: function(node){
-    if (this[node.callee.type]) this[node.callee.type](node.callee);
-    var self = this;
-    node.arguments.forEach(function(arg){
-      if (self[arg.type]) self[arg.type](arg);
-    })
-
     if (globals[node.name]) {
         node.name = globals[node.name];
       } else {
@@ -175,27 +145,16 @@ var handlers = {
       }
   },
   FunctionExpression: function (node) {
-    var self = this;
-    node.params.forEach(function(param){
-      if (self[param.type]) self[param.type](param);
-    });
-    if (this[node.body.type]) this[node.body.type](node.body);
   },
   ReturnStatement: function(node) {
-    if (this[node.argument.type]) this[node.argument.type](node.argument);
   },
   MemberExpression: function (node) {
-    if (this[node.object.type]) this[node.object.type](node.object);
-    if (this[node.property.type]) this[node.property.type](node.property);
   },
   ThisExpression: function (node) {
   },
   ExpressionStatement: function (node) {
-      if (this[node.expression.type]) this[node.expression.type](node.expression);
   },
   AssignmentExpression: function (node) {
-    if (this[node.left.type]) this[node.left.type](node.left);
-    if (this[node.right.type]) this[node.right.type](node.right);
   }
 }
 
@@ -218,12 +177,11 @@ estraverse.traverse(ast.program, {
       used.push(defaults[parent.object.name].props[node.name].ast);
       return;
     }
+    if (handlers[node.type]) handlers[node.type](node);
+    if (node.kind && node.kind !== 'var') node.kind = 'var';
   }
 });
-ast.program.body.forEach(function(node) {
-  if (node.kind && node.kind !== 'var') node.kind = 'var';
-  if (handlers[node.type]) handlers[node.type](node);
-});
+
 function gen() {
   return '_'.repeat((crypto.randomBytes(1)[0] % 16) + 1) + crypto.randomBytes((crypto.randomBytes(1)[0] % 16) + 1).toString('hex');
 }
