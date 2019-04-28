@@ -5,8 +5,6 @@ var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();
 
-var defaults = {};
-var props = {};
 var keywords = [
   'Array',
   'console',
@@ -62,7 +60,7 @@ var keywords = [
 ];
 
 var globals = {};
-function findVal(object, key) {
+function findKey(object, key) {
   var value = false;
   Object.keys(object).some(function(k) {
       if (k === key) {
@@ -70,7 +68,7 @@ function findVal(object, key) {
           return true;
       }
       if (object[k] && typeof object[k] === 'object') {
-          value = findVal(object[k], key);
+          value = findKey(object[k], key);
           return value !== undefined;
       }
   });
@@ -164,7 +162,7 @@ var handlers = {
     var brk = false;
     keywords.forEach(function(keyword){
       var evald = eval(keyword);
-      if (findVal(evald, node.object.name)) {
+      if (findKey(evald, node.object.name)) {
         brk = true;
       }
       if (evald.prototype && !brk) {
@@ -190,7 +188,7 @@ var handlers = {
     brk = false;
     keywords.forEach(function(keyword){
       var evald = eval(keyword);
-      if (findVal(evald, node.property.name)) {
+      if (findKey(evald, node.property.name)) {
         brk = true;
       }
       if (evald.prototype && !brk) {
