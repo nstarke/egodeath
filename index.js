@@ -8,6 +8,7 @@ var window = new Window();
 var defaults = {};
 var props = {};
 var keywords = [
+  'Array',
   'console',
   'Math',
   'Object',
@@ -36,7 +37,7 @@ var keywords = [
   'escape',
   'unescape',
   'String',
-  //'RegExp',
+  'RegExp',
   'Array',
   'Int8Array',
   'Uint8Array',,
@@ -53,149 +54,234 @@ var keywords = [
   'Promise',
   'Reflect',
   'Proxy',
-  'window'
-].forEach(function(item){
-  var primaryKey = gen();
-  var primaryCode  = 'var ' + primaryKey + ' = ' + item + ';\n';
-  defaults[item] = {
-    key: item,
-    used: false,
-    injected: false,
-    map: primaryKey,
-    ast: recast.parse(primaryCode).program.body.pop(),
-    props: {
-    }
-  }
-  Object.getOwnPropertyNames(eval(item)).forEach(function(sub){
-    var subkey = gen();
-    var code = primaryKey + '.' + subkey + ' = ' + primaryKey + '.' + sub + ';\n';
-    defaults[item].props[sub] = {
-      key: sub,
-      used: false,
-      injected: false,
-      map: subkey,
-      ast: recast.parse(code).program.body.pop()
-    }
-  })
-});
+  'window',
+  'module',
+  'exports',
+  'require',
+  'process'
+];
 
 var globals = {};
+function findVal(object, key) {
+  var value = false;
+  Object.keys(object).some(function(k) {
+      if (k === key) {
+          value = true;
+          return true;
+      }
+      if (object[k] && typeof object[k] === 'object') {
+          value = findVal(object[k], key);
+          return value !== undefined;
+      }
+  });
+  return value;
+}
 
 var handlers = {
   VariableDeclaration: function (node) {
-    var self = this;
-    node.declarations.forEach(function(dec){
-      if (self[dec.type]) {
-        self[dec.type](dec)
-      }
-    });
-    if (node.body && this[node.body.type]) this[node.body.type](node.body);
   },
   ObjectExpression: function (node) {
-    var self = this;
-    node.properties.forEach(function(prop){
-      if (self[prop.type]) self[prop.type](prop);
-    });
   },
   Property: function (node) {
-    if (this[node.key.type]) this[node.key.type](node.key);
-    if (this[node.value.type]) this[node.value.type](node.value);
+    if (globals[node.key.name]) {
+      node.key.name = globals[node.key.name];
+    } else {
+      var replacement = gen();
+      globals[node.key.name] = replacement;
+      node.key.name = replacement;
+    }
   },
   BlockStatement: function (node) {
-    var self = this;
-      node.body.forEach(function(b){
-        if (self[b.type]) {
-          self[b.type](b);
-        }
-      })
   },
   BinaryExpression: function(node) {
-    if (this[node.left.type]) {
-      this[node.left.type](node.left);
+    if (globals[node.left.name]) {
+      node.left.name = globals[node.left.name];
+    } else {
+      var replacement = gen();
+      globals[node.left.name] = replacement;
+      node.left.name = replacement;
     }
-    if (this[node.right.type]) {
-      this[node.right.type](node.right);
-     }
+    if (globals[node.right.name]) {
+      node.right.name = globals[node.right.name];
+    } else {
+      var replacement = gen();
+      globals[node.right.name] = replacement;
+      node.right.name = replacement;
+    }
   },
-  Identifier: function(node) {
-    // if (defaults[node.name]) {
-    //   node.name = defaults[node.name].map;
-    //   return;
-    // }
-    // if (props[node.name]) {
-    //   node.name = props[node.name].map;
-    //   return;
-    // }
-    if (globals[node.name]) {
-        node.name = globals[node.name];
-      } else {
-        var replacement = gen();
-        globals[node.name] = replacement;
-        node.name = replacement;
-      }
+  Identifier: function(node, parent) {
+    // not enough context to
   },
   VariableDeclarator: function(node){
-    if (this[node.init.type]) this[node.init.type](node.init);
-    if (this[node.id.type]) this[node.id.type](node.id);
-     // if (defaults[node.name]) {
-     //  node.name = defaults[node.name].map;
-     //  return
-    // }
-    // if (props[node.name]) {
-     //  node.name = props[node.name].map;
-     //  return;
-    // }
-    if (globals[node.name]) {
-        node.name = globals[node.name];
-      } else {
-        var replacement = gen();
-        globals[node.name] = replacement;
-        node.name = replacement;
-      }    if (globals[node.name]) {
-        node.name = globals[node.name];
-      } else {
-        var replacement = gen();
-        globals[node.name] = replacement;
-        node.name = replacement;
-      }
+    if (globals[node.id.name]) {
+      node.id.name = globals[node.id.name];
+    } else {
+      var replacement = gen();
+      globals[node.id.name] = replacement;
+      node.id.name = replacement;
+    }
   },
   CallExpression: function(node){
-    if (this[node.callee.type]) this[node.callee.type](node.callee);
-    var self = this;
+    if (globals[node.callee.name]) {
+      node.callee.name = globals[node.callee.name];
+    } else {
+      var replacement = gen();
+      globals[node.callee.name] = replacement;
+      node.callee.name = replacement;
+    }
     node.arguments.forEach(function(arg){
-      if (self[arg.type]) self[arg.type](arg);
-    })
-
-    if (globals[node.name]) {
-        node.name = globals[node.name];
+      if (globals[arg.name]) {
+        arg.name = globals[arg.name];
       } else {
         var replacement = gen();
-        globals[node.name] = replacement;
-        node.name = replacement;
+        globals[arg.name] = replacement;
+        arg.name = replacement;
       }
+    })
   },
   FunctionExpression: function (node) {
-    var self = this;
     node.params.forEach(function(param){
-      if (self[param.type]) self[param.type](param);
-    });
-    if (this[node.body.type]) this[node.body.type](node.body);
+      if (globals[param.name]) {
+        param.name = globals[param.name];
+      } else {
+        var replacement = gen();
+        globals[param.name] = replacement;
+        param.name = replacement;
+      }
+    })
   },
   ReturnStatement: function(node) {
-    if (this[node.argument.type]) this[node.argument.type](node.argument);
+    if (!node.argument) return;
+    if (globals[node.argument.name]) {
+      node.argument.name = globals[node.argument.name];
+    } else {
+      var replacement = gen();
+      globals[node.argument.name] = replacement;
+      node.argument.name = replacement;
+    }
   },
-  MemberExpression: function (node) {
-    if (this[node.object.type]) this[node.object.type](node.object);
-    if (this[node.property.type]) this[node.property.type](node.property);
+  MemberExpression: function (node, parent) {
+    var brk = false;
+    keywords.forEach(function(keyword){
+      var evald = eval(keyword);
+      if (findVal(evald, node.object.name)) {
+        brk = true;
+      }
+      if (evald.prototype && !brk) {
+        try {
+          if (evald.prototype[node.object.name]){
+            brk = true;
+          }
+        } catch (ex){
+
+        }
+      }
+    })
+    if (keywords.indexOf(node.object.name) !== -1) brk = true;
+    if (!brk) {
+      if (globals[node.object.name]) {
+        node.object.name = globals[node.object.name];
+      } else {
+        var replacement = gen();
+        globals[node.object.name] = replacement;
+        node.object.name = replacement;
+      }
+    }
+    brk = false;
+    keywords.forEach(function(keyword){
+      var evald = eval(keyword);
+      if (findVal(evald, node.property.name)) {
+        brk = true;
+      }
+      if (evald.prototype && !brk) {
+        try {
+          if (evald.prototype[node.property.name]){
+            brk = true;
+          }
+        } catch (ex) {
+
+        }
+      }
+    })
+    if (keywords.indexOf(node.property.name) !== -1) brk = true;
+    if (!brk) {
+      if (globals[node.property.name]) {
+        node.property.name = globals[node.property.name];
+      } else {
+        var replacement = gen();
+        globals[node.property.name] = replacement;
+        node.property.name = replacement;
+      }
+    }
   },
   ThisExpression: function (node) {
   },
   ExpressionStatement: function (node) {
-      if (this[node.expression.type]) this[node.expression.type](node.expression);
   },
   AssignmentExpression: function (node) {
-    if (this[node.left.type]) this[node.left.type](node.left);
-    if (this[node.right.type]) this[node.right.type](node.right);
+    if (globals[node.left.name]) {
+      node.left.name = globals[node.left.name];
+    } else {
+      var replacement = gen();
+      globals[node.left.name] = replacement;
+      node.left.name = replacement;
+    }
+    if (globals[node.right.name]) {
+      node.right.name = globals[node.right.name];
+    } else {
+      var replacement = gen();
+      globals[node.right.name] = replacement;
+      node.right.name = replacement;
+    }
+  },
+  FunctionDeclaration: function (node) {
+    if (globals[node.id.name]) {
+      node.id.name = globals[node.id.name];
+    } else {
+      var replacement = gen();
+      globals[node.id.name] = replacement;
+      node.id.name = replacement;
+    }
+    node.params.forEach(function(param){
+      if (globals[param.name]) {
+        param.name = globals[param.name];
+      } else {
+        var replacement = gen();
+        globals[param.name] = replacement;
+        param.name = replacement;
+      }
+    })
+  },
+  IfStatement: function (node) {
+    if (globals[node.test.name]) {
+      node.test.name = globals[node.test.name];
+    } else {
+      var replacement = gen();
+      globals[node.test.name] = replacement;
+      node.test.name = replacement;
+    }
+  },
+  UnaryExpression: function (node) {
+    if (globals[node.argument.name]) {
+      node.argument.name = globals[node.argument.name];
+    } else {
+      var replacement = gen();
+      globals[node.argument.name] = replacement;
+      node.argument.name = replacement;
+    } 
+  },
+  SwitchCase: function (node, parent) {
+    
+  },
+  SwitchStatement: function (node) {
+    if (!node.discriminant) return;
+    if (globals[node.discriminant.name]) {
+      node.discriminant.name = globals[node.discriminant.name];
+    } else {
+      var replacement = gen();
+      globals[node.discriminant.name] = replacement;
+      node.discriminant.name = replacement;
+    } 
   }
 }
 
@@ -208,22 +294,11 @@ var used = [];
 // first pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
-    if (defaults[node.name]) {
-      globals[node.name] = defaults[node.name].map;
-      used.push(defaults[node.name].ast);
-      return;
-    }
-    if (parent && parent.object && defaults[parent.object.name] && defaults[parent.object.name].props[node.name]) {
-      globals[node.name] = defaults[parent.object.name].props[node.name].map;
-      used.push(defaults[parent.object.name].props[node.name].ast);
-      return;
-    }
+    if (handlers[node.type]) handlers[node.type](node, parent);
+    if (node.kind && node.kind !== 'var') node.kind = 'var';
   }
 });
-ast.program.body.forEach(function(node) {
-  if (node.kind && node.kind !== 'var') node.kind = 'var';
-  if (handlers[node.type]) handlers[node.type](node);
-});
+
 function gen() {
   return '_'.repeat((crypto.randomBytes(1)[0] % 16) + 1) + crypto.randomBytes((crypto.randomBytes(1)[0] % 16) + 1).toString('hex');
 }
