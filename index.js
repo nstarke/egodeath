@@ -37,7 +37,7 @@ var keywords = [
   'escape',
   'unescape',
   'String',
-  //'RegExp',
+  'RegExp',
   'Array',
   'Int8Array',
   'Uint8Array',,
@@ -142,7 +142,7 @@ var handlers = {
   FunctionExpression: function (node) {
     node.params.forEach(function(param){
       if (globals[param.name]) {
-        param.name = globals[arg.name];
+        param.name = globals[param.name];
       } else {
         var replacement = gen();
         globals[param.name] = replacement;
@@ -224,6 +224,24 @@ var handlers = {
       globals[node.right.name] = replacement;
       node.right.name = replacement;
     }
+  },
+  FunctionDeclaration: function (node) {
+    if (globals[node.id.name]) {
+      node.id.name = globals[node.id.name];
+    } else {
+      var replacement = gen();
+      globals[node.id.name] = replacement;
+      node.id.name = replacement;
+    }
+    node.params.forEach(function(param){
+      if (globals[param.name]) {
+        param.name = globals[param.name];
+      } else {
+        var replacement = gen();
+        globals[param.name] = replacement;
+        param.name = replacement;
+      }
+    })
   }
 }
 
