@@ -70,19 +70,20 @@ function ensureNotKeyword(testee){
   if (keywords.indexOf(testee.name) !== -1) brk = true;
     if (!brk) {
       keywords.forEach(function(keyword){
-        var evald = eval(keyword);
-        if (evald[testee.name]) brk = true;
-        if (findKey(evald, testee.name)) {
-          brk = true;
-        }
-        if (!brk && evald.prototype) {
-          try {
-            if (evald.prototype[testee.name]){
-              brk = true;
-            }
-          } catch (ex){
-  
+        try {
+          var evald = eval(keyword);
+          if (evald[testee.name]) brk = true;
+          if (findKey(evald, testee.name)) {
+            brk = true;
           }
+          if (!brk && evald.prototype) {
+              if (evald.prototype[testee.name]){
+                brk = true;
+              }
+          
+          }
+        } catch (ex){
+          brk = true;
         }
       })
     }
@@ -200,7 +201,7 @@ var handlers = {
     
     node.arguments.forEach(function(arg){
       brk = ensureNotKeyword(arg);
-      if (arg){
+      if (arg.name){
         if (!brk){
           if (globals[arg.name]) {
             arg.name = globals[arg.name];
@@ -270,6 +271,19 @@ var handlers = {
   ThisExpression: function (node) {
   },
   ExpressionStatement: function (node) {
+    
+  },
+  UpdateExpression: function (node) {
+    var brk = ensureNotKeyword(node.argument);
+    if (!brk) {
+      if (globals[node.argument.name]) {
+        node.argument.name = globals[node.argument.name];
+      } else {
+        var replacement = gen();
+        globals[node.argument.name] = replacement;
+        node.argument.name = replacement;
+      }
+    }
   },
   AssignmentExpression: function (node) {
     var brk = ensureNotKeyword(node.left);
