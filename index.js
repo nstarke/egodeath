@@ -151,6 +151,7 @@ var handlers = {
     })
   },
   ReturnStatement: function(node) {
+    if (!node.argument) return;
     if (globals[node.argument.name]) {
       node.argument.name = globals[node.argument.name];
     } else {
@@ -167,8 +168,12 @@ var handlers = {
         brk = true;
       }
       if (evald.prototype && !brk) {
-        if (evald.prototype[node.object.name]){
-          brk = true;
+        try {
+          if (evald.prototype[node.object.name]){
+            brk = true;
+          }
+        } catch (ex){
+
         }
       }
     })
@@ -189,8 +194,12 @@ var handlers = {
         brk = true;
       }
       if (evald.prototype && !brk) {
-        if (evald.prototype[node.property.name]){
-          brk = true;
+        try {
+          if (evald.prototype[node.property.name]){
+            brk = true;
+          }
+        } catch (ex) {
+
         }
       }
     })
@@ -242,6 +251,37 @@ var handlers = {
         param.name = replacement;
       }
     })
+  },
+  IfStatement: function (node) {
+    if (globals[node.test.name]) {
+      node.test.name = globals[node.test.name];
+    } else {
+      var replacement = gen();
+      globals[node.test.name] = replacement;
+      node.test.name = replacement;
+    }
+  },
+  UnaryExpression: function (node) {
+    if (globals[node.argument.name]) {
+      node.argument.name = globals[node.argument.name];
+    } else {
+      var replacement = gen();
+      globals[node.argument.name] = replacement;
+      node.argument.name = replacement;
+    } 
+  },
+  SwitchCase: function (node, parent) {
+    
+  },
+  SwitchStatement: function (node) {
+    if (!node.discriminant) return;
+    if (globals[node.discriminant.name]) {
+      node.discriminant.name = globals[node.discriminant.name];
+    } else {
+      var replacement = gen();
+      globals[node.discriminant.name] = replacement;
+      node.discriminant.name = replacement;
+    } 
   }
 }
 
