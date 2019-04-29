@@ -125,8 +125,74 @@ var handlers = {
         }
       }
     }
+    if (node.value) {
+      var brk = ensureNotKeyword(node.value);
+      if (!brk) {
+        if (globals[node.value.name]) {
+          node.value.name = globals[node.value.name];
+        } else {
+          var replacement = gen();
+          globals[node.value.name] = replacement;
+          node.value.name = replacement;
+        }
+      }
+    }
   },
   BlockStatement: function (node) {
+  },
+  ForInStatement: function (node) {
+    var brk = ensureNotKeyword(node.left);
+    if (node.left){
+      if (!brk) {
+        if (globals[node.left.name]) {
+          node.left.name = globals[node.left.name];
+        } else {
+          var replacement = gen();
+          globals[node.left.name] = replacement;
+          node.left.name = replacement;
+        }
+      }
+    }
+    
+    brk = ensureNotKeyword(node.right);
+    if (node.right){
+      if (!brk){
+        if (globals[node.right.name]) {
+          node.right.name = globals[node.right.name];
+        } else {
+          var replacement = gen();
+          globals[node.right.name] = replacement;
+          node.right.name = replacement;
+        }
+      }
+    }
+  },
+  LogicalExpression: function (node) {
+    var brk = ensureNotKeyword(node.left);
+    if (node.left){
+      if (!brk) {
+        if (globals[node.left.name]) {
+          node.left.name = globals[node.left.name];
+        } else {
+          var replacement = gen();
+          globals[node.left.name] = replacement;
+          node.left.name = replacement;
+        }
+      }
+    }
+    
+    brk = ensureNotKeyword(node.right);
+    if (node.right){
+      if (!brk){
+        if (globals[node.right.name]) {
+          node.right.name = globals[node.right.name];
+        } else {
+          var replacement = gen();
+          globals[node.right.name] = replacement;
+          node.right.name = replacement;
+        }
+      }
+    }
   },
   BinaryExpression: function(node) {
     var brk = ensureNotKeyword(node.left);
@@ -184,6 +250,35 @@ var handlers = {
         }
       }
     }
+  },
+  NewExpression: function (node) {
+    var brk = ensureNotKeyword(node.callee);
+    if (node.callee){
+      if (!brk) {
+        if (globals[node.callee.name]) {
+          node.callee.name = globals[node.callee.name];
+        } else {
+          var replacement = gen();
+          globals[node.callee.name] = replacement;
+          node.callee.name = replacement;
+        }
+      }
+    }
+    
+    node.arguments.forEach(function(arg){
+      brk = ensureNotKeyword(arg);
+      if (arg.name){
+        if (!brk){
+          if (globals[arg.name]) {
+            arg.name = globals[arg.name];
+          } else {
+            var replacement = gen();
+            globals[arg.name] = replacement;
+            arg.name = replacement;
+          }
+        }
+      }
+    })
   },
   CallExpression: function(node){
     var brk = ensureNotKeyword(node.callee);
@@ -369,6 +464,39 @@ var handlers = {
         var replacement = gen();
         globals[node.discriminant.name] = replacement;
         node.discriminant.name = replacement;
+      } 
+    }
+  },
+  ConditionalExpression: function (node) {
+    var brk = ensureNotKeyword(node.test);
+    if (!brk) {
+      if (globals[node.test.name]) {
+        node.test.name = globals[node.test.name];
+      } else {
+        var replacement = gen();
+        globals[node.test.name] = replacement;
+        node.test.name = replacement;
+      } 
+    }
+    brk = ensureNotKeyword(node.consequent);
+    if (!brk) {
+      if (globals[node.consequent.name]) {
+        node.consequent.name = globals[node.consequent.name];
+      } else {
+        var replacement = gen();
+        globals[node.consequent.name] = replacement;
+        node.consequent.name = replacement;
+      } 
+    }
+
+    brk = ensureNotKeyword(node.alternate);
+    if (!brk) {
+      if (globals[node.alternate.name]) {
+        node.alternate.name = globals[node.alternate.name];
+      } else {
+        var replacement = gen();
+        globals[node.alternate.name] = replacement;
+        node.alternate.name = replacement;
       } 
     }
   }
