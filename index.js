@@ -5,6 +5,25 @@ var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();
 var isVarName = require('is-valid-var-name');
+var consoleKeywords = [
+  'assert',
+  'clear',
+  'count',
+  'error',
+  'group',
+  'groupCollapsed',
+  'groupEnd',
+  'info',
+  'log',
+  'table',
+  'time',
+  'timeEnd',
+  'trace',
+  'warn'
+].map(function(consoleKeyword){
+  return recast.parse('console.' + consoleKeyword + ' = function (){};\n').program.body.pop();
+});
+
 var keywords = [
   'Array',
   'console',
@@ -362,7 +381,6 @@ var handlers = {
   },
   MemberExpression: function (node, parent) {
     var brk = false;
-    
     brk = ensureNotKeyword(node.object);
     
     if (!brk) {
@@ -529,7 +547,6 @@ var handlers = {
 
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
-
 if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
 
 // First Pass
@@ -542,6 +559,8 @@ estraverse.traverse(ast.program, {
     if (node.kind && node.kind !== 'var') node.kind = 'var';
   }
 });
+
+ast.program.body = consoleKeywords.concat(ast.program.body);
 
 function gen() {
   var len = (crypto.randomBytes(1)[0] % 24) + 1

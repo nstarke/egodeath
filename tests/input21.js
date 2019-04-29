@@ -1,0 +1,13 @@
+console.log(1);
+console.assert(true);
+console.clear();
+console.count();
+console.error();
+console.groupCollapsed();
+console.groupEnd();
+console.info();
+console.table();
+console.time();
+console.timeEnd();
+console.trace();
+console.warn();
