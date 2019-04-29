@@ -3,7 +3,7 @@ var crypto = require('crypto');
 var recast = require('recast');
 var estraverse = require('estraverse');
 var Window = require('window');
-var window = new Window();
+var window = new Window();  
 var isVarName = require('is-valid-var-name');
 var consoleKeywords = [
   'assert',
@@ -42,17 +42,6 @@ var keywords = [
   'Number',
   'Date',
   'Infinity',
-  'eval',
-  'isFinite',
-  'isNaN',
-  'parseFloat',
-  'parseInt',
-  'decodeURI',
-  'decodeURIComponent',
-  'encodeURI',
-  'encodeURIComponent',
-  'escape',
-  'unescape',
   'String',
   'RegExp',
   'Array',
@@ -71,12 +60,11 @@ var keywords = [
   'Promise',
   'Reflect',
   'Proxy',
-  'window',
-  'module',
-  'exports',
-  'require',
-  'process'
+  'process',
+  'window'
 ];
+
+var windowProps = {}
 
 var Identifier = function (name) {
  return {"type":"Identifier","name":name}
@@ -101,6 +89,11 @@ var Literal = function (value) {
     type: 'Literal',
     value: value
   }
+}
+
+function generateGlobalVarDecl(name, swap) {
+  var code = "var " + swap + " = window." + name + ';\n';
+  return recast.parse(code).program.body.pop();
 }
 
 function generateRandomLiterals() {
@@ -190,7 +183,7 @@ var handlers = {
       var brk = ensureNotKeyword(node.key);
       if (!brk) {
         if (globals[node.key.name]) {
-          node.key.name = globals[node.key.name];
+          node.key.name = windowProps[node.key.name] ||globals[node.key.name];
         } else {
           var replacement = gen();
           globals[node.key.name] = replacement;
@@ -202,7 +195,7 @@ var handlers = {
       var brk = ensureNotKeyword(node.value);
       if (!brk) {
         if (globals[node.value.name]) {
-          node.value.name = globals[node.value.name];
+          node.value.name = windowProps[node.key.name] ||globals[node.value.name];
         } else {
           var replacement = gen();
           globals[node.value.name] = replacement;
@@ -214,11 +207,12 @@ var handlers = {
   BlockStatement: function (node) {
   },
   ForInStatement: function (node) {
+    if (!node.left) return;
     var brk = ensureNotKeyword(node.left);
     if (node.left){
       if (!brk) {
         if (globals[node.left.name]) {
-          node.left.name = globals[node.left.name];
+          node.left.name = windowProps[node.left.name] ||globals[node.left.name];
         } else {
           var replacement = gen();
           globals[node.left.name] = replacement;
@@ -226,12 +220,12 @@ var handlers = {
         }
       }
     }
-    
+    if (!node.right) return;
     brk = ensureNotKeyword(node.right);
     if (node.right){
       if (!brk){
         if (globals[node.right.name]) {
-          node.right.name = globals[node.right.name];
+          node.right.name = windowProps[node.right.name] || globals[node.right.name];
         } else {
           var replacement = gen();
           globals[node.right.name] = replacement;
@@ -245,7 +239,7 @@ var handlers = {
     if (node.left){
       if (!brk) {
         if (globals[node.left.name]) {
-          node.left.name = globals[node.left.name];
+          node.left.name = windowProps[node.left.name] || globals[node.left.name];
         } else {
           var replacement = gen();
           globals[node.left.name] = replacement;
@@ -258,7 +252,7 @@ var handlers = {
     if (node.right){
       if (!brk){
         if (globals[node.right.name]) {
-          node.right.name = globals[node.right.name];
+          node.right.name = windowProps[node.right.name] || globals[node.right.name];
         } else {
           var replacement = gen();
           globals[node.right.name] = replacement;
@@ -272,7 +266,7 @@ var handlers = {
     if (node.left){
       if (!brk) {
         if (globals[node.left.name]) {
-          node.left.name = globals[node.left.name];
+          node.left.name = windowProps[node.left.name] || globals[node.left.name];
         } else {
           var replacement = gen();
           globals[node.left.name] = replacement;
@@ -285,7 +279,7 @@ var handlers = {
     if (node.right){
       if (!brk){
         if (globals[node.right.name]) {
-          node.right.name = globals[node.right.name];
+          node.right.name = windowProps[node.right.name] || globals[node.right.name];
         } else {
           var replacement = gen();
           globals[node.right.name] = replacement;
@@ -301,7 +295,7 @@ var handlers = {
       var brk = ensureNotKeyword(node.id);
       if (!brk) {
         if (globals[node.id.name]) {
-          node.id.name = globals[node.id.name];
+          node.id.name = windowProps[node.id.name] || globals[node.id.name];
         } else {
           var replacement = gen();
           globals[node.id.name] = replacement;
@@ -314,7 +308,7 @@ var handlers = {
       brk = ensureNotKeyword(node.init);
       if (!brk){
         if (globals[node.init.name]) {
-          node.init.name = globals[node.init.name];
+          node.init.name = windowProps[node.init.name] || globals[node.init.name];
         } else {
           var replacement = gen();
           globals[node.init.name] = replacement;
@@ -324,11 +318,12 @@ var handlers = {
     }
   },
   NewExpression: function (node) {
+    if (!node.callee) return;
     var brk = ensureNotKeyword(node.callee);
     if (node.callee){
       if (!brk) {
         if (globals[node.callee.name]) {
-          node.callee.name = globals[node.callee.name];
+          node.callee.name = windowProps[node.callee.name] ||globals[node.callee.name];
         } else {
           var replacement = gen();
           globals[node.callee.name] = replacement;
@@ -336,13 +331,16 @@ var handlers = {
         }
       }
     }
-    
+    if (!node.callee) return;
     node.arguments.forEach(function(arg){
+      if (windowProps[arg.name]) {
+       return arg.name = globals[arg.name];
+      }
       brk = ensureNotKeyword(arg);
       if (arg.name){
         if (!brk){
           if (globals[arg.name]) {
-            arg.name = globals[arg.name];
+            arg.name = windowProps[arg.name] || globals[arg.name];
           } else {
             var replacement = gen();
             globals[arg.name] = replacement;
@@ -351,14 +349,14 @@ var handlers = {
         }
       }
     })
-    node.arguments = node.arguments.concat(generateRandomLiterals());
+    if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
     var brk = ensureNotKeyword(node.callee);
     if (node.callee){
       if (!brk) {
         if (globals[node.callee.name]) {
-          node.callee.name = globals[node.callee.name];
+          node.callee.name = windowProps[node.callee.name] ||globals[node.callee.name];
         } else {
           var replacement = gen();
           globals[node.callee.name] = replacement;
@@ -367,6 +365,9 @@ var handlers = {
       }
     }
     node.arguments.forEach(function(arg){
+      if (windowProps[arg.name]) {
+        return arg.name = windowProps[arg.name] || globals[arg.name];
+      }
       brk = ensureNotKeyword(arg);
       if (arg.name){
         if (!brk){
@@ -383,11 +384,12 @@ var handlers = {
     node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
+    if (!node.params) return;
     node.params.forEach(function(param){
       var brk = ensureNotKeyword(param);
       if (!brk) {
         if (globals[param.name]) {
-          param.name = globals[param.name];
+          param.name = windowProps[param.name] || globals[param.name];
         } else {
           var replacement = gen();
           globals[param.name] = replacement;
@@ -402,7 +404,7 @@ var handlers = {
     var brk = ensureNotKeyword(node.argument);
     if (!brk) {
       if (globals[node.argument.name]) {
-        node.argument.name = globals[node.argument.name];
+        node.argument.name = windowProps[node.argument.name] || globals[node.argument.name];
       } else {
         var replacement = gen();
         globals[node.argument.name] = replacement;
@@ -413,21 +415,40 @@ var handlers = {
   MemberExpression: function (node, parent) {
     var brk = false;
     brk = ensureNotKeyword(node.object);
+    if (!node.object) brk = true;
+    if (node.object.name === 'window') {
+    var rando = gen();
+      if (windowProps[node.property.name]){
+        node.object.name = windowProps[node.property.name].swap;
+      } else {
+        windowProps[node.property.name] = { name: node.property.name, swap: rando }
+        globals[node.property.name] = node.property.name;
+      }
+      brk = true;
+    }
+    if (windowProps[node.property.name]){
+      var name = windowProps[node.property.name].swap;
+      node.property.name = name;
+      parent = node;
+    }   
     if (!brk) {
       if (globals[node.object.name]) {
-        node.object.name = globals[node.object.name];
+        node.object.name = windowProps[node.object.name] || globals[node.object.name];
       } else {
         var replacement = gen();
         globals[node.object.name] = replacement;
         node.object.name = replacement;
       }
     }
-    
+
+    if (!node.property) return;
     brk = ensureNotKeyword(node.property);
-   
+    if (windowProps[node.property.name]) {
+      
+    }
     if (!brk) {
       if (globals[node.property.name]) {
-        node.property.name = globals[node.property.name];
+        node.property.name = windowProps[node.property.name] || globals[node.property.name];
       } else {
         var replacement = gen();
         globals[node.property.name] = replacement;
@@ -441,10 +462,11 @@ var handlers = {
     
   },
   UpdateExpression: function (node) {
+    if (!node.argument) return;
     var brk = ensureNotKeyword(node.argument);
     if (!brk) {
       if (globals[node.argument.name]) {
-        node.argument.name = globals[node.argument.name];
+        node.argument.name = windowProps[node.argument.name] || globals[node.argument.name];
       } else {
         var replacement = gen();
         globals[node.argument.name] = replacement;
@@ -454,19 +476,21 @@ var handlers = {
   },
   AssignmentExpression: function (node) {
     var brk = ensureNotKeyword(node.left);
+    if (!node.left) brk = true;
     if (!brk) {
       if (globals[node.left.name]) {
-        node.left.name = globals[node.left.name];
+        node.left.name = windowProps[node.left.name] || globals[node.left.name];
       } else {
         var replacement = gen();
         globals[node.left.name] = replacement;
         node.left.name = replacement;
       }
     }
+    if (!node.right) return;
     brk = ensureNotKeyword(node.right);
     if (!brk) {
       if (globals[node.right.name]) {
-        node.right.name = globals[node.right.name];
+        node.right.name   = windowProps[node.right.name] || globals[node.right.name];
       } else {
         var replacement = gen();
         globals[node.right.name] = replacement;
@@ -475,10 +499,11 @@ var handlers = {
     }
   },
   FunctionDeclaration: function (node) {
+    if (!node.id) brk = true;
     var brk = ensureNotKeyword(node.id);
     if (!brk) {
       if (globals[node.id.name]) {
-        node.id.name = globals[node.id.name];
+        node.id.name = windowProps[node.id.name] || globals[node.id.name];
       } else {
         var replacement = gen();
         globals[node.id.name] = replacement;
@@ -490,7 +515,7 @@ var handlers = {
       brk = ensureNotKeyword(param.name);
       if (!brk) {
         if (globals[param.name]) {
-          param.name = globals[param.name];
+          param.name = windowProps[param.name] || globals[param.name];
         } else {
           var replacement = gen();
           globals[param.name] = replacement;
@@ -501,10 +526,11 @@ var handlers = {
     node.params = node.params.concat(addIdentifiers());
   },
   IfStatement: function (node) {
+    if (!node.test) return;
     var brk = ensureNotKeyword(node.test);
     if (!brk){
       if (globals[node.test.name]) {
-        node.test.name = globals[node.test.name];
+        node.test.name = windowProps[node.test.name] ||globals[node.test.name];
       } else {
         var replacement = gen();
         globals[node.test.name] = replacement;
@@ -513,10 +539,11 @@ var handlers = {
     }
   },
   UnaryExpression: function (node) {
+    if (!node.argument) return;
     var brk = ensureNotKeyword(node.argument);
     if (!brk) {
       if (globals[node.argument.name]) {
-        node.argument.name = globals[node.argument.name];
+        node.argument.name = windowProps[node.argument.name] ||globals[node.argument.name];
       } else {
         var replacement = gen();
         globals[node.argument.name] = replacement;
@@ -532,7 +559,7 @@ var handlers = {
     var brk = ensureNotKeyword(node.discriminant);
     if (!brk) {
       if (globals[node.discriminant.name]) {
-        node.discriminant.name = globals[node.discriminant.name];
+        node.discriminant.name = windowProps[node.discriminant.name] || globals[node.discriminant.name];
       } else {
         var replacement = gen();
         globals[node.discriminant.name] = replacement;
@@ -542,9 +569,10 @@ var handlers = {
   },
   ConditionalExpression: function (node) {
     var brk = ensureNotKeyword(node.test);
+    if (!node.test) brk = true;
     if (!brk) {
       if (globals[node.test.name]) {
-        node.test.name = globals[node.test.name];
+        node.test.name = windowProps[node.test.name] || globals[node.test.name];
       } else {
         var replacement = gen();
         globals[node.test.name] = replacement;
@@ -552,9 +580,10 @@ var handlers = {
       } 
     }
     brk = ensureNotKeyword(node.consequent);
+    if (!node.consequent) brk = true;
     if (!brk) {
       if (globals[node.consequent.name]) {
-        node.consequent.name = globals[node.consequent.name];
+        node.consequent.name = windowProps[node.consequent.name] || globals[node.consequent.name];
       } else {
         var replacement = gen();
         globals[node.consequent.name] = replacement;
@@ -563,9 +592,10 @@ var handlers = {
     }
 
     brk = ensureNotKeyword(node.alternate);
+    if (!node.alternate) brk = true;
     if (!brk) {
       if (globals[node.alternate.name]) {
-        node.alternate.name = globals[node.alternate.name];
+        node.alternate.name = windowProps[node.alternate.name] || globals[node.alternate.name];
       } else {
         var replacement = gen();
         globals[node.alternate.name] = replacement;
@@ -606,6 +636,10 @@ function gen() {
  
   return start;
 }
-
+var windowDecl = Object.keys(windowProps).map (function(windowProp){
+  var prop = windowProps[windowProp];
+  return generateGlobalVarDecl(prop.name, prop.swap);
+});
+ast.program.body = windowDecl.concat(ast.program.body);
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
