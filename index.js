@@ -59,9 +59,24 @@ var keywords = [
   'process'
 ];
 
+var Identifier = function (name) {
+ return {"type":"Identifier","name":name}
+}
 
 Array.prototype.choose = function (){
   return this[(crypto.randomBytes(1))[0] % this.length];
+}
+
+Array.prototype.shuffle = function() {
+  var i = this.length, j, temp;
+  if ( i == 0 ) return this;
+  while ( --i ) {
+     j = Math.floor( Math.random() * ( i + 1 ) );
+     temp = this[i];
+     this[i] = this[j];
+     this[j] = temp;
+  }
+  return this;
 }
 
 function ensureNotKeyword(testee){
@@ -88,6 +103,15 @@ function ensureNotKeyword(testee){
       })
     }
     return brk;
+}
+
+function addIdentifiers(){
+  var len = crypto.randomBytes(1)[0] % 16;
+  var result = [];
+  for (var i = 0; i < len; i++){
+    result.push(new Identifier(gen()));
+  }
+  return result;
 }
 
 var globals = {};
@@ -222,7 +246,6 @@ var handlers = {
     }
   },
   Identifier: function(node, parent) {
-    // not enough context to
   },
   VariableDeclarator: function(node){
     if (node.id) {
@@ -322,6 +345,7 @@ var handlers = {
         }
       }
     })
+    node.params = node.params.concat(addIdentifiers());
   },
   ReturnStatement: function(node) {
     if (!node.argument) return;
@@ -426,6 +450,7 @@ var handlers = {
         }
       }
     })
+    node.params = node.params.concat(addIdentifiers());
   },
   IfStatement: function (node) {
     var brk = ensureNotKeyword(node.test);
@@ -507,10 +532,12 @@ var ast = recast.parse(code);
 
 if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
 
-var used = [];
-// first pass
+// First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
+    if (node.comments && node.comments.length){
+      delete node.comments;
+    }
     if (handlers[node.type]) handlers[node.type](node, parent);
     if (node.kind && node.kind !== 'var') node.kind = 'var';
   }
@@ -531,6 +558,5 @@ function gen() {
   return start;
 }
 
-ast.program.body = used.concat(ast.program.body);
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
