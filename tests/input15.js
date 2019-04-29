@@ -4,4 +4,4 @@ var First = function ( ) {
 	}
 }
 
-var second = new First();
+var second = new First(1, 2, 3, 4, true, [], {});

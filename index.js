@@ -82,6 +82,36 @@ var Identifier = function (name) {
  return {"type":"Identifier","name":name}
 }
 
+var ArrayExpression = function () {
+  return { 
+    type: 'ArrayExpression',
+    elements: []
+  }
+}
+
+var ObjectExpression = function () {
+  return { 
+    type: 'ObjectExpression',
+    properties: []
+  }
+}
+
+var Literal = function (value) {
+  return {
+    type: 'Literal',
+    value: value
+  }
+}
+
+function generateRandomLiterals() {
+  var len = crypto.randomBytes(1)[0] % 16;
+  var result = [];
+  for (var i = 0; i < len; i++){
+    result.push(new Literal([true, false, Math.floor(Math.random() * 10), Math.random(), gen()].choose()));
+  }
+  return result;
+}
+
 Array.prototype.choose = function (){
   return this[(crypto.randomBytes(1))[0] % this.length];
 }
@@ -321,6 +351,7 @@ var handlers = {
         }
       }
     })
+    node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
     var brk = ensureNotKeyword(node.callee);
@@ -335,7 +366,6 @@ var handlers = {
         }
       }
     }
-    
     node.arguments.forEach(function(arg){
       brk = ensureNotKeyword(arg);
       if (arg.name){
@@ -350,6 +380,7 @@ var handlers = {
         }
       }
     })
+    node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
     node.params.forEach(function(param){
@@ -382,7 +413,6 @@ var handlers = {
   MemberExpression: function (node, parent) {
     var brk = false;
     brk = ensureNotKeyword(node.object);
-    
     if (!brk) {
       if (globals[node.object.name]) {
         node.object.name = globals[node.object.name];
