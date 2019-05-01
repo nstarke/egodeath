@@ -62,6 +62,7 @@ var keywords = [
   'Reflect',
   'Proxy',
   'window',
+  'arguments',
   '"longassstringthatshouldneverevereverexist"',
   1,
   false
