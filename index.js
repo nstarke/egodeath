@@ -5,7 +5,7 @@ var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();  
 var isVarName = require('is-valid-var-name');
-
+var windowProps = [];
 var consoleKeywords = [
   'assert',
   'clear',
@@ -62,30 +62,23 @@ var keywords = [
   'Reflect',
   'Proxy',
   'window',
-  'argument',
-  '"longassstringthatshouldneverevereverexist"',
-  1,
-  false
+  'arguments',
+  'console',
+  'exports',
+  'module',
+  'require'
 ];
 
-var checkObjectProp = function(prop){
- return keywords.some(function(key){
-   var ret = false;
-    var evald = eval(key);
-    try {
-      ret = evald[node];
-    } catch (ex){
-      ret = true;
-    }
-    if (evald.prototype){
-      try {
-        ret = evald.prototype[prop];
-      } catch (ex){
-        ret = true;
-      }
-    }
-    return ret;
-  });
+var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'factory'];
+keywords.forEach(function (key ) {
+  var evald = eval(key);
+  props = props.concat(Object.getOwnPropertyNames(evald));
+  if (evald.prototype) props = props.concat(Object.getOwnPropertyNames(evald.prototype));
+});  
+keywords = keywords.concat(props);
+
+var isKeyword = function(prop){
+ return keywords.indexOf(prop) !== -1;
 }
 
 var Identifier = function (name) {
@@ -161,7 +154,7 @@ function addIdentifiers(){
   return result;
 }
 
-var globals = {'toString':{ __val: gen(), mapped: true }, 'hasOwnProperty':{ __val: gen(), mapped: true }, 'module':{ __val: gen(), mapped: true }, 'factory':{ __val: gen(), mapped: true }, 'global': { __val: gen(), mapped: true }, 'exports': { __val: gen(), mapped: true } };
+var globals = {}
 function findKey(object, key) {
   var value = false;
   if (!object) return true;
@@ -180,13 +173,11 @@ function findKey(object, key) {
 
 function substitute(node, key) {
   if (node.name === 'undefined') return node;
-  if ( keywords.indexOf(node.name) !== -1) {
-    return node;
-  }
-  if (!node.swapped) {
-    if (globals[node.name] && !globals[node.name].mapped)
+  var isKey = isKeyword(node.name)
+  if (!node.swapped && !isKey) {
+    if (globals[node.name])
       node.name = globals[node.name].___val;
-  }
+  } 
 }
 
 function traverseNode(node, finalKey) {
@@ -203,89 +194,47 @@ function traverseNode(node, finalKey) {
     return finalKey;
 }
 
-function traverseNodeAddSwap(node, finalKey) {
-  finalKey = finalKey || []
-  node.swapped = true;
-  if (node.object )  {
-     traverseNodeAddSwap(node.object, finalKey);
-  } 
-  if (node.property) traverseNodeAddSwap(node.property, finalKey);
-  return finalKey;
-}
-function traverseNodeSwap(base, node) {
-  if (!node) return null;
-  if (node.object) {
-    if (node.object.name === 'arguments') {
-      node.object.swapped = true;
-      return;
-    } 
-    var name = node.object.name;
-    if (base[name]){
-      node.swapped = true;
-      node.object.name = base[name].___val;
-      traverseNodeSwap(base[name], node.object)
-    }
-  }
-  if (node.property ) {
-    if (checkObjectProp(node.property.name)) {
-      node.property.swapped = true;
-      return node;
-    }
-    var name = node.property.name;
-    if (base[name]){
-      node.swapped = true;
-      node.property.name = base[name].___val;
-      traverseNodeSwap(base[name], node.property)
-    }
-  }
-  
-  return node;
-}
-
-function traverseNodeSwapArg(base, node) {
-  if (!node) return null;
-  if (node.object) {
-    if (node.object.name === 'arguments') {
+function traverseNodeAddSwap(base, node) {
+  if(!base) return;
+  if (node.object && !node.object.swapped)  {
+    var objName = node.object.name;
+    if (isKeyword(node.object.name)) {
       node.object.swapped = true;
     } else {
-      var name = node.object.name;
-      if (base[name]){
-        node.swapped = true;
-        node.object.name = base[name].___val;
-        traverseNodeSwapArg(base[name], node.object)
+      if (base[objName]){
+        node.object.swapped = true;
+        node.object.name = base[objName].___val;
+      } else {
+        
       }
     }
+     traverseNodeAddSwap(base[objName], node.object);
+  } 
+  if (node.property && !node.property.swapped) {
+    var propName = node.property.name;
+    if ( isKeyword(node.property.name)) {
+        node.property.swapped = true;
+      }else {
+        if (base[propName]){
+          node.property.swapped = true;
+          node.property.name = base[propName].___val;
+        } else {
+          base[propName] = {___val: gen()}
+          node.property.swapped = true;
+          node.property.name = base[propName].___val;
+        }
+        
+      }
+    traverseNodeAddSwap(base[propName], node.property);
   }
-  if (node.property ) {
-    if (checkObjectProp(node.property.name)) {
-      node.property.swapped = true;
-      return node;
-    }
-    var name = node.property.name;
-    if (base[name]){
-      node.swapped = true;
-      node.property.name = base[name].___val;
-      traverseNodeSwapArg(base[name], node.property)
-    }
-  }
-  
-  return node;
+  return;
 }
+
 var descend = function( base, names ) {
   for( var i = 0; i < names.length; i++ ) { 
     base = base[ names[i] ] = base[ names[i] ] || {___val: gen()};
   }
 }
-
-var descendSwap = function( base, node ) {
-  for( var i = 0; i < names.length; i++ ) { 
-    if (base[names[i]]){
-      console.log(names[i], node)
-    }
-    //base = base[ names[i] ] = base[ names[i] ] || {___val: gen()};
-  }
-}
-
 
 var firstPassHandlers = {
   VariableDeclaration: function (node) {
@@ -348,7 +297,14 @@ var firstPassHandlers = {
     return node;
   },
   AssignmentExpression: function (node) {
-    return node;
+    if (node.left  && node.left.object && node.left.object.name === 'window') {
+      if (node.left.property.name) {
+        node.swapped = true;
+        globals[node.left.property.name] = globals[node.left.property.name] || { ___val: gen() }
+        windowProps.push(node.left.property.name);
+        //keywords.push(node.left.property.name);
+      }
+    }
   },
   FunctionDeclaration: function (node) {
     return node;
@@ -387,10 +343,11 @@ var secondPassHandlers = {
     return node;
   },
   ObjectExpression: function (node) {
+    
     return node;
   },
   Property: function (node) {
-    return node;
+      return node;
   },
   BlockStatement: function (node) {
     return node;
@@ -416,6 +373,7 @@ var secondPassHandlers = {
     //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
+   
     return node;
     //node.arguments = node.arguments.concat(generateRandomLiterals());
   },
@@ -426,12 +384,7 @@ var secondPassHandlers = {
     return node;
   },
   MemberExpression: function (node, parent) {
-    var keys = traverseNode(node).reverse();
-    if (keys.some(function(k){return keywords.indexOf(k) === -1})){
-      traverseNodeSwap(globals, node);
-    } else{
-        traverseNodeAddSwap(node);
-      }
+    traverseNodeAddSwap(globals, node);
     return node;
     
   },
@@ -609,8 +562,7 @@ estraverse.traverse(ast.program, {
   }
 });
 
-ast.program.body = consoleKeywords.concat(ast.program.body);
-
+//ast.program.body = consoleKeywords.concat(ast.program.body);
 function gen() {
   var len = (crypto.randomBytes(1)[0] % 24) + 1
   var start ="";
@@ -625,6 +577,7 @@ function gen() {
  
   return start;
 }
+
 //ast.program.body = windowProps.concat(ast.program.body);
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
