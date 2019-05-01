@@ -62,7 +62,7 @@ var keywords = [
   'Reflect',
   'Proxy',
   'window',
-  'arguments',
+  'argument',
   '"longassstringthatshouldneverevereverexist"',
   1,
   false
@@ -215,7 +215,10 @@ function traverseNodeAddSwap(node, finalKey) {
 function traverseNodeSwap(base, node) {
   if (!node) return null;
   if (node.object) {
- 
+    if (node.object.name === 'arguments') {
+      node.object.swapped = true;
+      return;
+    } 
     var name = node.object.name;
     if (base[name]){
       node.swapped = true;
@@ -233,6 +236,36 @@ function traverseNodeSwap(base, node) {
       node.swapped = true;
       node.property.name = base[name].___val;
       traverseNodeSwap(base[name], node.property)
+    }
+  }
+  
+  return node;
+}
+
+function traverseNodeSwapArg(base, node) {
+  if (!node) return null;
+  if (node.object) {
+    if (node.object.name === 'arguments') {
+      node.object.swapped = true;
+    } else {
+      var name = node.object.name;
+      if (base[name]){
+        node.swapped = true;
+        node.object.name = base[name].___val;
+        traverseNodeSwapArg(base[name], node.object)
+      }
+    }
+  }
+  if (node.property ) {
+    if (checkObjectProp(node.property.name)) {
+      node.property.swapped = true;
+      return node;
+    }
+    var name = node.property.name;
+    if (base[name]){
+      node.swapped = true;
+      node.property.name = base[name].___val;
+      traverseNodeSwapArg(base[name], node.property)
     }
   }
   
@@ -394,11 +427,11 @@ var secondPassHandlers = {
   },
   MemberExpression: function (node, parent) {
     var keys = traverseNode(node).reverse();
-    if (keys.length && keys.some(function(k){return keywords.indexOf(k) === -1})){
+    if (keys.some(function(k){return keywords.indexOf(k) === -1})){
       traverseNodeSwap(globals, node);
     } else{
-      traverseNodeAddSwap(node);
-    }
+        traverseNodeAddSwap(node);
+      }
     return node;
     
   },
