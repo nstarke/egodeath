@@ -5,6 +5,7 @@ var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();  
 var isVarName = require('is-valid-var-name');
+
 var consoleKeywords = [
   'assert',
   'clear',
@@ -24,9 +25,9 @@ var consoleKeywords = [
   return recast.parse('console.' + consoleKeyword + ' = function (){};\n').program.body.pop();
 });
 
+
 var keywords = [
   'Array',
-  'console',
   'Math',
   'Object',
   'Function',
@@ -60,11 +61,31 @@ var keywords = [
   'Promise',
   'Reflect',
   'Proxy',
-  'process',
-  'window'
+  'window',
+  '"longassstringthatshouldneverevereverexist"',
+  1,
+  false
 ];
 
-var windowProps = {}
+var checkObjectProp = function(prop){
+ return keywords.some(function(key){
+   var ret = false;
+    var evald = eval(key);
+    try {
+      ret = evald[node];
+    } catch (ex){
+      ret = true;
+    }
+    if (evald.prototype){
+      try {
+        ret = evald.prototype[prop];
+      } catch (ex){
+        ret = true;
+      }
+    }
+    return ret;
+  });
+}
 
 var Identifier = function (name) {
  return {"type":"Identifier","name":name}
@@ -96,6 +117,11 @@ function generateGlobalVarDecl(name, swap) {
   return recast.parse(code).program.body.pop();
 }
 
+function generateGlobalDecl(name, swap) {
+  var code = "var " + swap + ' = ' + name + ';\n';
+  return recast.parse(code).program.body.pop();
+}
+
 function generateRandomLiterals() {
   var len = crypto.randomBytes(1)[0] % 16;
   var result = [];
@@ -122,29 +148,7 @@ Array.prototype.shuffle = function() {
 }
 
 function ensureNotKeyword(testee){
-  var brk = false;
-  if ((testee.name) === 'undefined') return true;
-  if (keywords.indexOf(testee.name) !== -1) brk = true;
-    if (!brk) {
-      keywords.forEach(function(keyword){
-        try {
-          var evald = eval(keyword);
-          if (evald[testee.name]) brk = true;
-          if (findKey(evald, testee.name)) {
-            brk = true;
-          }
-          if (!brk && evald.prototype) {
-              if (evald.prototype[testee.name]){
-                brk = true;
-              }
-          
-          }
-        } catch (ex){
-          brk = true;
-        }
-      })
-    }
-    return brk;
+  return findKey(window, testee.name);
 }
 
 function addIdentifiers(){
@@ -156,7 +160,7 @@ function addIdentifiers(){
   return result;
 }
 
-var globals = {};
+var globals = {'toString':{ __val: gen(), mapped: true }, 'hasOwnProperty':{ __val: gen(), mapped: true }, 'module':{ __val: gen(), mapped: true }, 'factory':{ __val: gen(), mapped: true }, 'global': { __val: gen(), mapped: true }, 'exports': { __val: gen(), mapped: true } };
 function findKey(object, key) {
   var value = false;
   if (!object) return true;
@@ -173,438 +177,367 @@ function findKey(object, key) {
   return value;
 }
 
-var handlers = {
-  VariableDeclaration: function (node) {
-  },
-  ObjectExpression: function (node) {
-  },
-  Property: function (node) {
-    if (node.key) {
-      var brk = ensureNotKeyword(node.key);
-      if (!brk) {
-        if (globals[node.key.name]) {
-          node.key.name = windowProps[node.key.name] ||globals[node.key.name];
-        } else {
-          var replacement = gen();
-          globals[node.key.name] = replacement;
-          node.key.name = replacement;
-        }
-      }
-    }
-    if (node.value) {
-      var brk = ensureNotKeyword(node.value);
-      if (!brk) {
-        if (globals[node.value.name]) {
-          node.value.name = windowProps[node.key.name] ||globals[node.value.name];
-        } else {
-          var replacement = gen();
-          globals[node.value.name] = replacement;
-          node.value.name = replacement;
-        }
-      }
-    }
-  },
-  BlockStatement: function (node) {
-  },
-  ForInStatement: function (node) {
-    if (!node.left) return;
-    var brk = ensureNotKeyword(node.left);
-    if (node.left){
-      if (!brk) {
-        if (globals[node.left.name]) {
-          node.left.name = windowProps[node.left.name] ||globals[node.left.name];
-        } else {
-          var replacement = gen();
-          globals[node.left.name] = replacement;
-          node.left.name = replacement;
-        }
-      }
-    }
-    if (!node.right) return;
-    brk = ensureNotKeyword(node.right);
-    if (node.right){
-      if (!brk){
-        if (globals[node.right.name]) {
-          node.right.name = windowProps[node.right.name] || globals[node.right.name];
-        } else {
-          var replacement = gen();
-          globals[node.right.name] = replacement;
-          node.right.name = replacement;
-        }
-      }
-    }
-  },
-  LogicalExpression: function (node) {
-    var brk = ensureNotKeyword(node.left);
-    if (node.left){
-      if (!brk) {
-        if (globals[node.left.name]) {
-          node.left.name = windowProps[node.left.name] || globals[node.left.name];
-        } else {
-          var replacement = gen();
-          globals[node.left.name] = replacement;
-          node.left.name = replacement;
-        }
-      }
-    }
-    
-    brk = ensureNotKeyword(node.right);
-    if (node.right){
-      if (!brk){
-        if (globals[node.right.name]) {
-          node.right.name = windowProps[node.right.name] || globals[node.right.name];
-        } else {
-          var replacement = gen();
-          globals[node.right.name] = replacement;
-          node.right.name = replacement;
-        }
-      }
-    }
-  },
-  BinaryExpression: function(node) {
-    var brk = ensureNotKeyword(node.left);
-    if (node.left){
-      if (!brk) {
-        if (globals[node.left.name]) {
-          node.left.name = windowProps[node.left.name] || globals[node.left.name];
-        } else {
-          var replacement = gen();
-          globals[node.left.name] = replacement;
-          node.left.name = replacement;
-        }
-      }
-    }
-    
-    brk = ensureNotKeyword(node.right);
-    if (node.right){
-      if (!brk){
-        if (globals[node.right.name]) {
-          node.right.name = windowProps[node.right.name] || globals[node.right.name];
-        } else {
-          var replacement = gen();
-          globals[node.right.name] = replacement;
-          node.right.name = replacement;
-        }
-      }
-    }
-  },
-  Identifier: function(node, parent) {
-  },
-  VariableDeclarator: function(node){
-    if (node.id) {
-      var brk = ensureNotKeyword(node.id);
-      if (!brk) {
-        if (globals[node.id.name]) {
-          node.id.name = windowProps[node.id.name] || globals[node.id.name];
-        } else {
-          var replacement = gen();
-          globals[node.id.name] = replacement;
-          node.id.name = replacement;
-        }
-      }
-    }
-    
-    if (node.init){
-      brk = ensureNotKeyword(node.init);
-      if (!brk){
-        if (globals[node.init.name]) {
-          node.init.name = windowProps[node.init.name] || globals[node.init.name];
-        } else {
-          var replacement = gen();
-          globals[node.init.name] = replacement;
-          node.init.name = replacement;
-        }
-      }
-    }
-  },
-  NewExpression: function (node) {
-    if (!node.callee) return;
-    var brk = ensureNotKeyword(node.callee);
-    if (node.callee){
-      if (!brk) {
-        if (globals[node.callee.name]) {
-          node.callee.name = windowProps[node.callee.name] ||globals[node.callee.name];
-        } else {
-          var replacement = gen();
-          globals[node.callee.name] = replacement;
-          node.callee.name = replacement;
-        }
-      }
-    }
-    if (!node.callee) return;
-    node.arguments.forEach(function(arg){
-      if (windowProps[arg.name]) {
-       return arg.name = globals[arg.name];
-      }
-      brk = ensureNotKeyword(arg);
-      if (arg.name){
-        if (!brk){
-          if (globals[arg.name]) {
-            arg.name = windowProps[arg.name] || globals[arg.name];
-          } else {
-            var replacement = gen();
-            globals[arg.name] = replacement;
-            arg.name = replacement;
-          }
-        }
-      }
-    })
-    if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
-  },
-  CallExpression: function(node){
-    var brk = ensureNotKeyword(node.callee);
-    if (node.callee){
-      if (!brk) {
-        if (globals[node.callee.name]) {
-          node.callee.name = windowProps[node.callee.name] ||globals[node.callee.name];
-        } else {
-          var replacement = gen();
-          globals[node.callee.name] = replacement;
-          node.callee.name = replacement;
-        }
-      }
-    }
-    node.arguments.forEach(function(arg){
-      if (windowProps[arg.name]) {
-        return arg.name = windowProps[arg.name] || globals[arg.name];
-      }
-      brk = ensureNotKeyword(arg);
-      if (arg.name){
-        if (!brk){
-          if (globals[arg.name]) {
-            arg.name = globals[arg.name];
-          } else {
-            var replacement = gen();
-            globals[arg.name] = replacement;
-            arg.name = replacement;
-          }
-        }
-      }
-    })
-    node.arguments = node.arguments.concat(generateRandomLiterals());
-  },
-  FunctionExpression: function (node) {
-    if (!node.params) return;
-    node.params.forEach(function(param){
-      var brk = ensureNotKeyword(param);
-      if (!brk) {
-        if (globals[param.name]) {
-          param.name = windowProps[param.name] || globals[param.name];
-        } else {
-          var replacement = gen();
-          globals[param.name] = replacement;
-          param.name = replacement;
-        }
-      }
-    })
-    node.params = node.params.concat(addIdentifiers());
-  },
-  ReturnStatement: function(node) {
-    if (!node.argument) return;
-    var brk = ensureNotKeyword(node.argument);
-    if (!brk) {
-      if (globals[node.argument.name]) {
-        node.argument.name = windowProps[node.argument.name] || globals[node.argument.name];
-      } else {
-        var replacement = gen();
-        globals[node.argument.name] = replacement;
-        node.argument.name = replacement;
-      }
-    }
-  },
-  MemberExpression: function (node, parent) {
-    var brk = false;
-    brk = ensureNotKeyword(node.object);
-    if (!node.object) brk = true;
-    if (node.object.name === 'window') {
-    var rando = gen();
-      if (windowProps[node.property.name]){
-        node.object.name = windowProps[node.property.name].swap;
-      } else {
-        windowProps[node.property.name] = { name: node.property.name, swap: rando }
-        globals[node.property.name] = node.property.name;
-      }
-      brk = true;
-    }
-    if (windowProps[node.property.name]){
-      var name = windowProps[node.property.name].swap;
-      node.property.name = name;
-      parent = node;
-    }   
-    if (!brk) {
-      if (globals[node.object.name]) {
-        node.object.name = windowProps[node.object.name] || globals[node.object.name];
-      } else {
-        var replacement = gen();
-        globals[node.object.name] = replacement;
-        node.object.name = replacement;
-      }
-    }
-
-    if (!node.property) return;
-    brk = ensureNotKeyword(node.property);
-    if (windowProps[node.property.name]) {
-      
-    }
-    if (!brk) {
-      if (globals[node.property.name]) {
-        node.property.name = windowProps[node.property.name] || globals[node.property.name];
-      } else {
-        var replacement = gen();
-        globals[node.property.name] = replacement;
-        node.property.name = replacement;
-      }
-    }
-  },
-  ThisExpression: function (node) {
-  },
-  ExpressionStatement: function (node) {
-    
-  },
-  UpdateExpression: function (node) {
-    if (!node.argument) return;
-    var brk = ensureNotKeyword(node.argument);
-    if (!brk) {
-      if (globals[node.argument.name]) {
-        node.argument.name = windowProps[node.argument.name] || globals[node.argument.name];
-      } else {
-        var replacement = gen();
-        globals[node.argument.name] = replacement;
-        node.argument.name = replacement;
-      }
-    }
-  },
-  AssignmentExpression: function (node) {
-    var brk = ensureNotKeyword(node.left);
-    if (!node.left) brk = true;
-    if (!brk) {
-      if (globals[node.left.name]) {
-        node.left.name = windowProps[node.left.name] || globals[node.left.name];
-      } else {
-        var replacement = gen();
-        globals[node.left.name] = replacement;
-        node.left.name = replacement;
-      }
-    }
-    if (!node.right) return;
-    brk = ensureNotKeyword(node.right);
-    if (!brk) {
-      if (globals[node.right.name]) {
-        node.right.name   = windowProps[node.right.name] || globals[node.right.name];
-      } else {
-        var replacement = gen();
-        globals[node.right.name] = replacement;
-        node.right.name = replacement;
-      }
-    }
-  },
-  FunctionDeclaration: function (node) {
-    if (!node.id) brk = true;
-    var brk = ensureNotKeyword(node.id);
-    if (!brk) {
-      if (globals[node.id.name]) {
-        node.id.name = windowProps[node.id.name] || globals[node.id.name];
-      } else {
-        var replacement = gen();
-        globals[node.id.name] = replacement;
-        node.id.name = replacement;
-      }
-    }
-    brk = false;
-    node.params.forEach(function(param){
-      brk = ensureNotKeyword(param.name);
-      if (!brk) {
-        if (globals[param.name]) {
-          param.name = windowProps[param.name] || globals[param.name];
-        } else {
-          var replacement = gen();
-          globals[param.name] = replacement;
-          param.name = replacement;
-        }
-      }
-    })
-    node.params = node.params.concat(addIdentifiers());
-  },
-  IfStatement: function (node) {
-    if (!node.test) return;
-    var brk = ensureNotKeyword(node.test);
-    if (!brk){
-      if (globals[node.test.name]) {
-        node.test.name = windowProps[node.test.name] ||globals[node.test.name];
-      } else {
-        var replacement = gen();
-        globals[node.test.name] = replacement;
-        node.test.name = replacement;
-      }
-    }
-  },
-  UnaryExpression: function (node) {
-    if (!node.argument) return;
-    var brk = ensureNotKeyword(node.argument);
-    if (!brk) {
-      if (globals[node.argument.name]) {
-        node.argument.name = windowProps[node.argument.name] ||globals[node.argument.name];
-      } else {
-        var replacement = gen();
-        globals[node.argument.name] = replacement;
-        node.argument.name = replacement;
-      } 
-    }
-  },
-  SwitchCase: function (node, parent) {
-    
-  },
-  SwitchStatement: function (node) {
-    if (!node.discriminant) return;
-    var brk = ensureNotKeyword(node.discriminant);
-    if (!brk) {
-      if (globals[node.discriminant.name]) {
-        node.discriminant.name = windowProps[node.discriminant.name] || globals[node.discriminant.name];
-      } else {
-        var replacement = gen();
-        globals[node.discriminant.name] = replacement;
-        node.discriminant.name = replacement;
-      } 
-    }
-  },
-  ConditionalExpression: function (node) {
-    var brk = ensureNotKeyword(node.test);
-    if (!node.test) brk = true;
-    if (!brk) {
-      if (globals[node.test.name]) {
-        node.test.name = windowProps[node.test.name] || globals[node.test.name];
-      } else {
-        var replacement = gen();
-        globals[node.test.name] = replacement;
-        node.test.name = replacement;
-      } 
-    }
-    brk = ensureNotKeyword(node.consequent);
-    if (!node.consequent) brk = true;
-    if (!brk) {
-      if (globals[node.consequent.name]) {
-        node.consequent.name = windowProps[node.consequent.name] || globals[node.consequent.name];
-      } else {
-        var replacement = gen();
-        globals[node.consequent.name] = replacement;
-        node.consequent.name = replacement;
-      } 
-    }
-
-    brk = ensureNotKeyword(node.alternate);
-    if (!node.alternate) brk = true;
-    if (!brk) {
-      if (globals[node.alternate.name]) {
-        node.alternate.name = windowProps[node.alternate.name] || globals[node.alternate.name];
-      } else {
-        var replacement = gen();
-        globals[node.alternate.name] = replacement;
-        node.alternate.name = replacement;
-      } 
-    }
+function substitute(node, key) {
+  if (node.name === 'undefined') return node;
+  if ( keywords.indexOf(node.name) !== -1) {
+    return node;
+  }
+  if (!node.swapped) {
+    if (globals[node.name] && !globals[node.name].mapped)
+      node.name = globals[node.name].___val;
   }
 }
 
+function traverseNode(node, finalKey) {
+    finalKey = finalKey || []
+    node.mapped = true;
+    if (node.object)  {
+      finalKey.push(node.object.name);
+      return traverseNode(node.object, finalKey);
+    } 
+     if (node.property) {
+      finalKey.push(node.property.name);
+      return traverseNode(node.object, finalKey);
+    }
+    return finalKey;
+}
+
+function traverseNodeAddSwap(node, finalKey) {
+  finalKey = finalKey || []
+  node.swapped = true;
+  if (node.object )  {
+     traverseNodeAddSwap(node.object, finalKey);
+  } 
+  if (node.property) traverseNodeAddSwap(node.property, finalKey);
+  return finalKey;
+}
+function traverseNodeSwap(base, node) {
+  if (!node) return null;
+  if (node.object) {
+ 
+    var name = node.object.name;
+    if (base[name]){
+      node.swapped = true;
+      node.object.name = base[name].___val;
+      traverseNodeSwap(base[name], node.object)
+    }
+  }
+  if (node.property ) {
+    if (checkObjectProp(node.property.name)) {
+      node.property.swapped = true;
+      return node;
+    }
+    var name = node.property.name;
+    if (base[name]){
+      node.swapped = true;
+      node.property.name = base[name].___val;
+      traverseNodeSwap(base[name], node.property)
+    }
+  }
+  
+  return node;
+}
+var descend = function( base, names ) {
+  for( var i = 0; i < names.length; i++ ) { 
+    base = base[ names[i] ] = base[ names[i] ] || {___val: gen()};
+  }
+}
+
+var descendSwap = function( base, node ) {
+  for( var i = 0; i < names.length; i++ ) { 
+    if (base[names[i]]){
+      console.log(names[i], node)
+    }
+    //base = base[ names[i] ] = base[ names[i] ] || {___val: gen()};
+  }
+}
+
+
+var firstPassHandlers = {
+  VariableDeclaration: function (node) {
+    return node;
+  },
+  ObjectExpression: function (node) {
+    return node;
+  },
+  Property: function (node) {
+    return node;
+  },
+  BlockStatement: function (node) {
+    return node;
+  },
+  ForInStatement: function (node) {
+    return node;
+  },
+  LogicalExpression: function (node) {
+    return node;
+  },
+  BinaryExpression: function(node) {
+    return node;
+  },
+  Identifier: function(node, parent) {
+    if (!node.mapped) {
+      globals[node.name] = { ___val: gen() }
+    }
+    //substitute(node, node.name);
+    return node;
+  },
+  VariableDeclarator: function(node){
+    return node;
+  },
+  NewExpression: function (node) {
+    return node;
+    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  CallExpression: function(node){
+    return node;
+    //node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  FunctionExpression: function (node) {
+    return node;
+  },
+  ReturnStatement: function(node) {
+    return node;
+  },
+  MemberExpression: function (node, parent) {
+    var keys = traverseNode(node);
+    keys = keys.reverse();
+    descend(globals, keys);
+  },
+  ThisExpression: function (node) {
+    return node;
+  },
+  ExpressionStatement: function (node) {
+    return node;
+  },
+  UpdateExpression: function (node) {
+    return node;
+  },
+  AssignmentExpression: function (node) {
+    return node;
+  },
+  FunctionDeclaration: function (node) {
+    return node;
+  },
+  IfStatement: function (node) {
+    return node;
+  },
+  UnaryExpression: function (node) {
+    return node;
+  },
+  SwitchCase: function (node, parent) {
+    return node;
+  },
+  SwitchStatement: function (node) {
+    return node;
+  },
+  ConditionalExpression: function (node) {
+    return node;
+  },
+  Program: function(node) {
+    return node;
+  },
+  Literal: function (node) {
+    return node;
+  },
+  ThrowStatement: function (node) {
+    return node;
+  },
+  Directive: function (node){
+    return node;
+  }
+}
+
+var secondPassHandlers = {
+  VariableDeclaration: function (node) {
+    return node;
+  },
+  ObjectExpression: function (node) {
+    return node;
+  },
+  Property: function (node) {
+    return node;
+  },
+  BlockStatement: function (node) {
+    return node;
+  },
+  ForInStatement: function (node) {
+    return node;
+  },
+  LogicalExpression: function (node) {
+    return node;
+  },
+  BinaryExpression: function(node) {
+    return node;
+  },
+  Identifier: function(node, parent) {
+    substitute(node, node.name);
+    return node;
+  },
+  VariableDeclarator: function(node){
+    return node;
+  },
+  NewExpression: function (node) {
+    return node;
+    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  CallExpression: function(node){
+    return node;
+    //node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  FunctionExpression: function (node) {
+    return node;
+  },
+  ReturnStatement: function(node) {
+    return node;
+  },
+  MemberExpression: function (node, parent) {
+    var keys = traverseNode(node).reverse();
+    if (keys.length && keys.some(function(k){return keywords.indexOf(k) === -1})){
+      traverseNodeSwap(globals, node);
+    } else{
+      traverseNodeAddSwap(node);
+    }
+    return node;
+    
+  },
+  ThisExpression: function (node) {
+    return node;
+  },
+  ExpressionStatement: function (node) {
+    return node;
+  },
+  UpdateExpression: function (node) {
+    return node;
+  },
+  AssignmentExpression: function (node) {
+    return node;
+  },
+  FunctionDeclaration: function (node) {
+    return node;
+  },
+  IfStatement: function (node) {
+    return node;
+  },
+  UnaryExpression: function (node) {
+    return node;
+  },
+  SwitchCase: function (node, parent) {
+    return node;
+  },
+  SwitchStatement: function (node) {
+    return node;
+  },
+  ConditionalExpression: function (node) {
+    return node;
+  },
+  Program: function(node) {
+    return node;
+  },
+  Literal: function (node) {
+    return node;
+  },
+  ThrowStatement: function (node) {
+    return node;
+  },
+  Directive: function (node){
+    return node;
+  }
+}
+var thirdPassHandlers = {
+  VariableDeclaration: function (node) {
+    return node;
+  },
+  ObjectExpression: function (node) {
+    return node;
+  },
+  Property: function (node) {
+    return node;
+  },
+  BlockStatement: function (node) {
+    return node;
+  },
+  ForInStatement: function (node) {
+    return node;
+  },
+  LogicalExpression: function (node) {
+    return node;
+  },
+  BinaryExpression: function(node) {
+    return node;
+  },
+  Identifier: function(node, parent) {
+    //substitute(node, node.name);
+    return node;
+  },
+  VariableDeclarator: function(node){
+    return node;
+  },
+  NewExpression: function (node) {
+    return node;
+    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  CallExpression: function(node){
+    return node;
+    //node.arguments = node.arguments.concat(generateRandomLiterals());
+  },
+  FunctionExpression: function (node) {
+    node.params = node.params.concat(addIdentifiers());
+    return node;
+  },
+  ReturnStatement: function(node) {
+    return node;
+  },
+  MemberExpression: function (node, parent) {
+    //var keys = traverseNode(node);
+    //node.name = descendValue(globals, keys.reverse());
+    return node;
+    
+  },
+  ThisExpression: function (node) {
+    return node;
+  },
+  ExpressionStatement: function (node) {
+    return node;
+  },
+  UpdateExpression: function (node) {
+    return node;
+  },
+  AssignmentExpression: function (node) {
+    return node;
+  },
+  FunctionDeclaration: function (node) {
+    node.params = node.params.concat(addIdentifiers());
+    return node;
+  },
+  IfStatement: function (node) {
+    return node;
+  },
+  UnaryExpression: function (node) {
+    return node;
+  },
+  SwitchCase: function (node, parent) {
+    return node;
+  },
+  SwitchStatement: function (node) {
+    return node;
+  },
+  ConditionalExpression: function (node) {
+    return node;
+  },
+  Program: function(node) {
+    return node;
+  },
+  Literal: function (node) {
+    return node;
+  },
+  ThrowStatement: function (node) {
+    return node;
+  },
+  Directive: function (node){
+    return node;
+  }
+}
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
 if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
@@ -612,11 +545,33 @@ if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
 // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
-    if (node.comments && node.comments.length){
-      delete node.comments;
-    }
-    if (handlers[node.type]) handlers[node.type](node, parent);
-    if (node.kind && node.kind !== 'var') node.kind = 'var';
+    // if (node.comments && node.comments.length){
+    //   delete node.comments;
+    // }
+    if (!firstPassHandlers[node.type]) return node;
+    var node = firstPassHandlers[node.type](node, parent);
+  }
+});
+
+// Second Pass
+estraverse.traverse(ast.program, {
+  enter: function(node, parent) {
+    // if (node.comments && node.comments.length){
+    //   delete node.comments;
+    // }
+    if (!secondPassHandlers[node.type]) return node;
+    var node = secondPassHandlers[node.type](node, parent);
+  }
+});
+
+// third Pass
+estraverse.traverse(ast.program, {
+  enter: function(node, parent) {
+    // if (node.comments && node.comments.length){
+    //   delete node.comments;
+    // }
+    if (!thirdPassHandlers[node.type]) return node;
+    var node = secondPassHandlers[node.type](node, parent);
   }
 });
 
@@ -636,10 +591,6 @@ function gen() {
  
   return start;
 }
-var windowDecl = Object.keys(windowProps).map (function(windowProp){
-  var prop = windowProps[windowProp];
-  return generateGlobalVarDecl(prop.name, prop.swap);
-});
-ast.program.body = windowDecl.concat(ast.program.body);
+//ast.program.body = windowProps.concat(ast.program.body);
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
