@@ -86,39 +86,11 @@ var Identifier = function (name) {
  return {"type":"Identifier","name":name}
 }
 
-var ArrayExpression = function () {
-  return { 
-    type: 'ArrayExpression',
-    elements: []
-  }
-}
-
-var ObjectExpression = function () {
-  return { 
-    type: 'ObjectExpression',
-    properties: []
-  }
-}
-
 var Literal = function (value) {
   return {
     type: 'Literal',
     value: value
   }
-}
-
-function generateGlobalDecl(name, swap) {
-  var code = "var " + swap + ' = ' + name + ';\n';
-  return recast.parse(code).program.body.pop();
-}
-
-function generateRandomLiterals() {
-  var len = crypto.randomBytes(1)[0] % 16;
-  var result = [];
-  for (var i = 0; i < len; i++){
-    result.push(new Literal([true, false, Math.floor(Math.random() * 10), Math.random(), gen()].choose()));
-  }
-  return result;
 }
 
 Array.prototype.choose = function (){
@@ -157,10 +129,7 @@ function substitute(node, ctx) {
       } else {
         node.name = globals[node.name].___val;
       }
-    } else  if (isKey){
-       // globals[node.name] = { ___val: node.name}
-    }
-      //
+    } 
   }
 }
 
@@ -233,7 +202,6 @@ var firstPassHandlers = {
   },
   Identifier: function(node, parent) {
     globals[node.name] = globals[node.name] || { ___val: gen() }
-    //substitute(node, node.name);
     return node;
   },
   VariableDeclarator: function(node, parent){
@@ -241,11 +209,9 @@ var firstPassHandlers = {
   },
   NewExpression: function (node) {
     return node;
-    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
     return node;
-    //node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
     return node;
@@ -255,7 +221,6 @@ var firstPassHandlers = {
   },
   MemberExpression: function (node, parent) {
     var keys = traverseNode(node);
-    //keys = keys.reverse();
     descend(globals, keys);
   },
   ThisExpression: function (node) {
@@ -272,7 +237,6 @@ var firstPassHandlers = {
       if (node.left.property.name) {
         globals[node.left.property.name] = globals[node.left.property.name] || { ___val: gen() }
         windowProps.push(node.left.property.name);
-        //keywords.push(node.left.property.name);
       }
     } 
     return node;
@@ -340,8 +304,6 @@ var secondPassHandlers = {
     return node;
   },
   Identifier: function(node, parent) {
-    
-    //qsubstitute(node);
     return node;
   },
   VariableDeclarator: function(node){
@@ -353,13 +315,11 @@ var secondPassHandlers = {
     substitute(node.callee);
     node.arguments.forEach(substitute);
     return node;
-    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
     substitute(node.callee);
     node.arguments.forEach(substitute);
     return node;
-    //node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
     node.params.forEach(substitute);
@@ -451,7 +411,6 @@ var thirdPassHandlers = {
     return node;
   },
   Identifier: function(node, parent) {
-    //substitute(node, node.name);
     return node;
   },
   VariableDeclarator: function(node){
@@ -459,12 +418,11 @@ var thirdPassHandlers = {
     return node;
   },
   NewExpression: function (node) {
+    if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
     return node;
-    //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
     return node;
-    //node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
     node.params = node.params.concat(addIdentifiers());
@@ -474,8 +432,6 @@ var thirdPassHandlers = {
     return node;
   },
   MemberExpression: function (node, parent) {
-    //var keys = traverseNode(node);
-    //node.name = descendValue(globals, keys.reverse());
     return node;
     
   },
@@ -529,9 +485,6 @@ if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
 // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
-    // if (node.comments && node.comments.length){
-    //   delete node.comments;
-    // }
     if (!firstPassHandlers[node.type]) return node;
     var node = firstPassHandlers[node.type](node, parent);
   }
@@ -540,9 +493,6 @@ estraverse.traverse(ast.program, {
 // Second Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
-    // if (node.comments && node.comments.length){
-    //   delete node.comments;
-    // }
     if (!secondPassHandlers[node.type]) return node;
     var node = secondPassHandlers[node.type](node, parent);
   }
@@ -551,16 +501,12 @@ estraverse.traverse(ast.program, {
 // third Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
-    // if (node.comments && node.comments.length){
-    //   delete node.comments;
-    // }
     if (node.comments) delete node.comments;
     if (!thirdPassHandlers[node.type]) return node;
-    //var node = thirdPassHandlers[node.type](node, parent);
+    var node = thirdPassHandlers[node.type](node, parent);
   }
 });
 
-//ast.program.body = consoleKeywords.concat(ast.program.body);
 function gen() {
   var len = (crypto.randomBytes(1)[0] % 24) + 1
   var start ="";
@@ -575,6 +521,8 @@ function gen() {
  
   return start;
 }
-//ast.program.body = windowProps.concat(ast.program.body);
+
+ast.program.body = consoleKeywords.concat(ast.program.body);
+
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
