@@ -69,7 +69,7 @@ var keywords = [
   'require'
 ];
 
-var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'factory'];
+var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty',  'createElement'];
 keywords.forEach(function (key ) {
   var evald = eval(key);
   props = props.concat(Object.getOwnPropertyNames(evald));
@@ -106,10 +106,7 @@ var Literal = function (value) {
   }
 }
 
-function generateGlobalVarDecl(name, swap) {
-  var code = "var " + swap + " = window." + name + ';\n';
-  return recast.parse(code).program.body.pop();
-}
+var safeProps = keywords.slice(0);
 
 function generateGlobalDecl(name, swap) {
   var code = "var " + swap + ' = ' + name + ';\n';
@@ -140,11 +137,6 @@ Array.prototype.shuffle = function() {
   }
   return this;
 }
-
-function ensureNotKeyword(testee){
-  return findKey(window, testee.name);
-}
-
 function addIdentifiers(){
   var len = crypto.randomBytes(1)[0] % 16;
   var result = [];
@@ -155,77 +147,60 @@ function addIdentifiers(){
 }
 
 var globals = {}
-function findKey(object, key) {
-  var value = false;
-  if (!object) return true;
-  Object.keys(object).some(function(k) {
-      if (k === key) {
-          value = true;
-          return true;
-      }
-      if (object[k] && typeof object[k] === 'object') {
-          value = findKey(object[k], key);
-          return value !== undefined;
-      }
-  });
-  return value;
-}
 
 function substitute(node, key) {
   if (node.name === 'undefined') return node;
-  var isKey = isKeyword(node.name)
-  if (!node.swapped && !isKey) {
-    if (globals[node.name])
+  var isKey = isKeyword(node.name);
+  if (!node.skipped && !isKey) {
+    if (globals[node.name]){
       node.name = globals[node.name].___val;
-  } 
+    } else  if (isKey){
+       // globals[node.name] = { ___val: node.name}
+    }
+      //
+  }
 }
 
 function traverseNode(node, finalKey) {
     finalKey = finalKey || []
-    node.mapped = true;
     if (node.object)  {
-      finalKey.push(node.object.name);
-      return traverseNode(node.object, finalKey);
+      if (node.object.name)finalKey.push(node.object.name);
+      if (node.property) {
+        finalKey.push(node.property.name);
+      } else {
+        return traverseNode(node.object, finalKey);
+      }
     } 
-     if (node.property) {
-      finalKey.push(node.property.name);
-      return traverseNode(node.object, finalKey);
-    }
+     
     return finalKey;
 }
 
 function traverseNodeAddSwap(base, node) {
-  if(!base) return;
-  if (node.object && !node.object.swapped)  {
-    var objName = node.object.name;
-    if (isKeyword(node.object.name)) {
-      node.object.swapped = true;
+  base = base || { ___val : gen()};
+  if (node.object){
+    var isSafeProp = safeProps.indexOf(node.object.name) === -1;
+    if (!isKeyword(node.object.name)){
+      base[node.object.name] = base[node.object.name] || {___val: gen()}
     } else {
-      if (base[objName]){
-        node.object.swapped = true;
-        node.object.name = base[objName].___val;
-      } else {
-        
+      if (!isSafeProp){
+        node.object.skipped = true;
       }
     }
-     traverseNodeAddSwap(base[objName], node.object);
-  } 
-  if (node.property && !node.property.swapped) {
-    var propName = node.property.name;
-    if ( isKeyword(node.property.name)) {
-        node.property.swapped = true;
-      }else {
-        if (base[propName]){
-          node.property.swapped = true;
-          node.property.name = base[propName].___val;
-        } else {
-          base[propName] = {___val: gen()}
-          node.property.swapped = true;
-          node.property.name = base[propName].___val;
+   
+    if (node.property)  {
+      var name = node.property.name;
+      isSafeProp = safeProps.indexOf(node.property.name) === -1;
+      if (!isKeyword(node.property.name) && isSafeProp){
+        if(base[node.object.name][name]) {
+          node.property.name = base[node.object.name][name].___val;
         }
-        
+      } else {
+        node.property.skipped = true;
       }
-    traverseNodeAddSwap(base[propName], node.property);
+
+    } else {
+      traverseNodeAddSwap(base[node.object.name], node.object);
+    } 
   }
   return;
 }
@@ -244,7 +219,7 @@ var firstPassHandlers = {
     return node;
   },
   Property: function (node) {
-    return node;
+    
   },
   BlockStatement: function (node) {
     return node;
@@ -259,13 +234,17 @@ var firstPassHandlers = {
     return node;
   },
   Identifier: function(node, parent) {
-    if (!node.mapped) {
-      globals[node.name] = { ___val: gen() }
-    }
+    globals[node.name] = globals[node.name] || { ___val: gen() }
     //substitute(node, node.name);
     return node;
   },
   VariableDeclarator: function(node){
+    if (isKeyword(node.id.name)) {
+      delete keywords[keywords.indexOf(node.id.name)];
+    } else  if (safeProps.indexOf(node.id.name) !== -1) {
+      node.id.skipped = true;
+    }
+   
     return node;
   },
   NewExpression: function (node) {
@@ -298,13 +277,15 @@ var firstPassHandlers = {
   },
   AssignmentExpression: function (node) {
     if (node.left  && node.left.object && node.left.object.name === 'window') {
+        
       if (node.left.property.name) {
-        node.swapped = true;
+        node.left.property.skipped = true;
         globals[node.left.property.name] = globals[node.left.property.name] || { ___val: gen() }
         windowProps.push(node.left.property.name);
         //keywords.push(node.left.property.name);
       }
     }
+    return node;
   },
   FunctionDeclaration: function (node) {
     return node;
@@ -337,7 +318,6 @@ var firstPassHandlers = {
     return node;
   }
 }
-
 var secondPassHandlers = {
   VariableDeclaration: function (node) {
     return node;
@@ -362,11 +342,11 @@ var secondPassHandlers = {
     return node;
   },
   Identifier: function(node, parent) {
-    substitute(node, node.name);
+    substitute(node);
     return node;
   },
   VariableDeclarator: function(node){
-    return node;
+   
   },
   NewExpression: function (node) {
     return node;
@@ -528,7 +508,6 @@ var thirdPassHandlers = {
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
 if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
-
 // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
@@ -557,8 +536,9 @@ estraverse.traverse(ast.program, {
     // if (node.comments && node.comments.length){
     //   delete node.comments;
     // }
+    if (node.comments) delete node.comments;
     if (!thirdPassHandlers[node.type]) return node;
-    var node = secondPassHandlers[node.type](node, parent);
+    //var node = thirdPassHandlers[node.type](node, parent);
   }
 });
 
@@ -577,7 +557,6 @@ function gen() {
  
   return start;
 }
-
 //ast.program.body = windowProps.concat(ast.program.body);
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
