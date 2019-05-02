@@ -67,10 +67,19 @@ var keywords = [
   'exports',
   'module',
   'require',
-  'window.document'
+  'window.document',
+  '"a"',
+  '1',
+  '["a"]',
+  '{a:2}',
+  'unescape',
+  'decodeURIComponent',
+  'decodeURI',
+  'encodeURIComponent',
+  'encodeURI'
 ];
 
-var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement'];
+var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement', 'subarray'];
 keywords.forEach(function (key ) {
   var evald = eval(key);
   props = props.concat(Object.getOwnPropertyNames(evald));
@@ -129,7 +138,11 @@ function substitute(node, ctx) {
       } else {
         node.name = globals[node.name].___val;
       }
-    } 
+    } else {
+      if (ctx &&  ctx[node.name]){
+        node.name = ctx[node.name].___val;
+      } 
+    }
   }
 }
 
@@ -285,6 +298,12 @@ var secondPassHandlers = {
     substitute(node.value);
       return node;
   },
+  ForStatement: function (node) {
+    substitute(node.init);
+    substitute(node.test);
+    substitute(node.update);
+    return node;
+  },
   BlockStatement: function (node) {
     return node;
   },
@@ -372,7 +391,7 @@ var secondPassHandlers = {
   ConditionalExpression: function (node) {
     substitute(node.alternate);
     substitute(node.test);
-    substitute(node.conditional);
+    substitute(node.consequent);
     return node;
   },
   Program: function(node) {
@@ -386,6 +405,14 @@ var secondPassHandlers = {
   },
   Directive: function (node){
     return node;
+  },
+  DoWhileStatement: function( node){
+    substitute(node.test);
+    substitute(node.body);
+    return node;
+  },
+  ArrayExpression: function (node) {
+    node.elements.forEach(substitute);
   }
 }
 var thirdPassHandlers = {
@@ -418,8 +445,7 @@ var thirdPassHandlers = {
     return node;
   },
   NewExpression: function (node) {
-    if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
-    return node;
+      return node;
   },
   CallExpression: function(node){
     return node;
@@ -482,7 +508,7 @@ var thirdPassHandlers = {
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
 if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
-// First Pass
+    // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
     if (!firstPassHandlers[node.type]) return node;
@@ -522,7 +548,7 @@ function gen() {
   return start;
 }
 
-ast.program.body = consoleKeywords.concat(ast.program.body);
+//ast.program.body = consoleKeywords.concat(ast.program.body);
 
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
