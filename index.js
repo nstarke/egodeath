@@ -138,10 +138,6 @@ function substitute(node, ctx) {
       } else {
         node.name = globals[node.name].___val;
       }
-    } else {
-      if (ctx &&  ctx[node.name]){
-        node.name = ctx[node.name].___val;
-      } 
     }
   }
 }
@@ -165,18 +161,14 @@ function traverseNodeAddSwap(base, node) {
   if (node.object){
     var name = node.object.name;
     if (!isKeyword(name)){
-       substitute(node.object, base[node.object.name]);
+      substitute(node.object, base);
     }
     if (name === 'document') node.object.name = 'window.document';
     if (node.property)  {
       var name = node.property.name;
       if (!isKeyword(node.property.name) && !node.property.skipped){
        
-        if (global[node.property.name]){
-          substitute(node.property.name[node.property.name]);
-        } else {
-          substitute(node.property, base[node.property.name]);
-        }
+          substitute(node.property, base);
       } 
     } else {
       traverseNodeAddSwap(base[node.object.name], node.object);
