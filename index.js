@@ -73,6 +73,7 @@ var keywords = [
   '["a"]',
   '{a:2}',
   'unescape',
+  'escape', 
   'decodeURIComponent',
   'decodeURI',
   'encodeURIComponent',
@@ -167,7 +168,6 @@ function traverseNodeAddSwap(base, node) {
     if (node.property)  {
       var name = node.property.name;
       if (!isKeyword(node.property.name) && !node.property.skipped){
-       
           substitute(node.property, base);
       } 
     } else {
@@ -288,7 +288,7 @@ var secondPassHandlers = {
   Property: function (node) {
     substitute(node.key);
     substitute(node.value);
-      return node;
+    return node;
   },
   ForStatement: function (node) {
     substitute(node.init);
@@ -390,6 +390,7 @@ var secondPassHandlers = {
     return node;
   },
   Literal: function (node) {
+  
     return node;
   },
   ThrowStatement: function (node) {
@@ -405,6 +406,10 @@ var secondPassHandlers = {
   },
   ArrayExpression: function (node) {
     node.elements.forEach(substitute);
+  }, 
+  CatchClause: function (node) {
+    substitute(node.param);
+    return node;
   }
 }
 var thirdPassHandlers = {
@@ -488,6 +493,10 @@ var thirdPassHandlers = {
     return node;
   },
   Literal: function (node) {
+    var found = findNested(globals, node.value);
+    if (found.length){
+      node.value = found.pop().___val;
+    }
     return node;
   },
   ThrowStatement: function (node) {
@@ -499,7 +508,7 @@ var thirdPassHandlers = {
 }
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
-if (process.env.DEBUG) console.log(JSON.stringify(ast.program));
+if (process.env.DEBUG) console.log(ast.program.body);
     // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
@@ -507,7 +516,6 @@ estraverse.traverse(ast.program, {
     var node = firstPassHandlers[node.type](node, parent);
   }
 });
-
 // Second Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
@@ -540,7 +548,27 @@ function gen() {
   return start;
 }
 
-//ast.program.body = consoleKeywords.concat(ast.program.body);
+function findNested(obj, key, memo) {
+  var i,
+      proto = Object.prototype,
+      ts = proto.toString,
+      hasOwn = proto.hasOwnProperty.bind(obj);
+
+  if ('[object Array]' !== ts.call(memo)) memo = [];
+
+  for (i in obj) {
+    if (hasOwn(i)) {
+      if (i === key) {
+        memo.push(obj[i]);
+      } else if ('[object Array]' === ts.call(obj[i]) || '[object Object]' === ts.call(obj[i])) {
+        findNested(obj[i], key, memo);
+      }
+    }
+  }
+
+  return memo;
+}
+ast.program.body = consoleKeywords.concat(ast.program.body);
 
 var trans = recast.print(ast).code;
 if (!process.env.DEBUG) console.log(trans);
