@@ -66,10 +66,11 @@ var keywords = [
   'console',
   'exports',
   'module',
-  'require'
+  'require',
+  'window.document'
 ];
 
-var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty',  'createElement'];
+var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement'];
 keywords.forEach(function (key ) {
   var evald = eval(key);
   props = props.concat(Object.getOwnPropertyNames(evald));
@@ -105,8 +106,6 @@ var Literal = function (value) {
     value: value
   }
 }
-
-var safeProps = keywords.slice(0);
 
 function generateGlobalDecl(name, swap) {
   var code = "var " + swap + ' = ' + name + ';\n';
@@ -148,12 +147,16 @@ function addIdentifiers(){
 
 var globals = {}
 
-function substitute(node, key) {
-  if (node.name === 'undefined') return node;
+function substitute(node, ctx) {
+  if (!node || !node.name|| node.name === 'undefined') return node;
   var isKey = isKeyword(node.name);
   if (!node.skipped && !isKey) {
     if (globals[node.name]){
-      node.name = globals[node.name].___val;
+      if (ctx &&  ctx[node.name]){
+        node.name = ctx[node.name].___val;
+      } else {
+        node.name = globals[node.name].___val;
+      }
     } else  if (isKey){
        // globals[node.name] = { ___val: node.name}
     }
@@ -178,26 +181,21 @@ function traverseNode(node, finalKey) {
 function traverseNodeAddSwap(base, node) {
   base = base || { ___val : gen()};
   if (node.object){
-    var isSafeProp = safeProps.indexOf(node.object.name) === -1;
-    if (!isKeyword(node.object.name)){
-      base[node.object.name] = base[node.object.name] || {___val: gen()}
-    } else {
-      if (!isSafeProp){
-        node.object.skipped = true;
-      }
+    var name = node.object.name;
+    if (!isKeyword(name)){
+       substitute(node.object, base[node.object.name]);
     }
-   
+    if (name === 'document') node.object.name = 'window.document';
     if (node.property)  {
       var name = node.property.name;
-      isSafeProp = safeProps.indexOf(node.property.name) === -1;
-      if (!isKeyword(node.property.name) && isSafeProp){
-        if(base[node.object.name][name]) {
-          node.property.name = base[node.object.name][name].___val;
+      if (!isKeyword(node.property.name) && !node.property.skipped){
+       
+        if (global[node.property.name]){
+          substitute(node.property.name[node.property.name]);
+        } else {
+          substitute(node.property, base[node.property.name]);
         }
-      } else {
-        node.property.skipped = true;
-      }
-
+      } 
     } else {
       traverseNodeAddSwap(base[node.object.name], node.object);
     } 
@@ -219,7 +217,7 @@ var firstPassHandlers = {
     return node;
   },
   Property: function (node) {
-    
+    return node;
   },
   BlockStatement: function (node) {
     return node;
@@ -238,13 +236,7 @@ var firstPassHandlers = {
     //substitute(node, node.name);
     return node;
   },
-  VariableDeclarator: function(node){
-    if (isKeyword(node.id.name)) {
-      delete keywords[keywords.indexOf(node.id.name)];
-    } else  if (safeProps.indexOf(node.id.name) !== -1) {
-      node.id.skipped = true;
-    }
-   
+  VariableDeclarator: function(node, parent){
     return node;
   },
   NewExpression: function (node) {
@@ -263,7 +255,7 @@ var firstPassHandlers = {
   },
   MemberExpression: function (node, parent) {
     var keys = traverseNode(node);
-    keys = keys.reverse();
+    //keys = keys.reverse();
     descend(globals, keys);
   },
   ThisExpression: function (node) {
@@ -277,14 +269,12 @@ var firstPassHandlers = {
   },
   AssignmentExpression: function (node) {
     if (node.left  && node.left.object && node.left.object.name === 'window') {
-        
       if (node.left.property.name) {
-        node.left.property.skipped = true;
         globals[node.left.property.name] = globals[node.left.property.name] || { ___val: gen() }
         windowProps.push(node.left.property.name);
         //keywords.push(node.left.property.name);
       }
-    }
+    } 
     return node;
   },
   FunctionDeclaration: function (node) {
@@ -327,40 +317,56 @@ var secondPassHandlers = {
     return node;
   },
   Property: function (node) {
+    substitute(node.key);
+    substitute(node.value);
       return node;
   },
   BlockStatement: function (node) {
     return node;
   },
   ForInStatement: function (node) {
+    substitute(node.left);
+    substitute(node.right); 
     return node;
   },
   LogicalExpression: function (node) {
+    substitute(node.left);
+    substitute(node.right);
     return node;
   },
   BinaryExpression: function(node) {
+    substitute(node.left);
+    substitute(node.right);
     return node;
   },
   Identifier: function(node, parent) {
-    substitute(node);
+    
+    //qsubstitute(node);
     return node;
   },
   VariableDeclarator: function(node){
-   
+      substitute(node.id);
+    substitute(node.init);
+    return node;
   },
   NewExpression: function (node) {
+    substitute(node.callee);
+    node.arguments.forEach(substitute);
     return node;
     //if (node.callee.name !== 'RegExp') node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   CallExpression: function(node){
-   
+    substitute(node.callee);
+    node.arguments.forEach(substitute);
     return node;
     //node.arguments = node.arguments.concat(generateRandomLiterals());
   },
   FunctionExpression: function (node) {
+    node.params.forEach(substitute);
     return node;
   },
   ReturnStatement: function(node) {
+    substitute(node.argument);
     return node;
   },
   MemberExpression: function (node, parent) {
@@ -375,27 +381,38 @@ var secondPassHandlers = {
     return node;
   },
   UpdateExpression: function (node) {
+    substitute(node.argument);
     return node;
   },
   AssignmentExpression: function (node) {
+    substitute(node.left);
+    substitute(node.right);
     return node;
   },
   FunctionDeclaration: function (node) {
+    substitute(node.id);
+    node.params.forEach(substitute);
     return node;
   },
   IfStatement: function (node) {
+    substitute(node.test);
     return node;
   },
   UnaryExpression: function (node) {
+    substitute(node.argument);
     return node;
   },
   SwitchCase: function (node, parent) {
     return node;
   },
   SwitchStatement: function (node) {
+    substitute(node.discriminant);
     return node;
   },
   ConditionalExpression: function (node) {
+    substitute(node.alternate);
+    substitute(node.test);
+    substitute(node.conditional);
     return node;
   },
   Program: function(node) {
@@ -438,6 +455,7 @@ var thirdPassHandlers = {
     return node;
   },
   VariableDeclarator: function(node){
+   
     return node;
   },
   NewExpression: function (node) {
