@@ -297,7 +297,7 @@ var secondPassHandlers = {
     return node;
   },
   Property: function (node, parent) {
-    //substitute(node.key);
+    substitute(node.key);
     substitute(node.value);
     return node;
   },
