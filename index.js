@@ -5,6 +5,8 @@ var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();  
 var isVarName = require('is-valid-var-name');
+var jsfuck = require('jsfuck').JSFuck;
+
 var windowProps = [];
 var consoleKeywords = [
   'assert',
@@ -80,7 +82,7 @@ var keywords = [
   'encodeURI'
 ];
 
-var props = ['not', 'getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement', 'resolveWith', 'appendChild', 'setAttribute', 'cloneNode', 'innerHTML', 'lastChild', 'createHTMLDocument', 'body', 'childNodes', 'rejectWith', 'notifyWith'];
+var props = ['subarray','not', 'getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement', 'resolveWith', 'appendChild', 'setAttribute', 'cloneNode', 'innerHTML', 'lastChild', 'createHTMLDocument', 'body', 'childNodes', 'rejectWith', 'notifyWith'];
 keywords.forEach(function (key ) {
   var evald = eval(key);
   props = props.concat(Object.getOwnPropertyNames(evald));
@@ -293,7 +295,6 @@ var secondPassHandlers = {
     return node;
   },
   ObjectExpression: function (node) {
-    
     return node;
   },
   Property: function (node, parent) {
@@ -400,9 +401,19 @@ var secondPassHandlers = {
   Program: function(node) {
     return node;
   },
-  Literal: function (node) {
-  
+  Literal: function (node, parent) {
+    if (parent.type === 'ObjectExpression') console.log(parent);
+    if (typeof node.value === 'string' && node.value && parent.type !== 'Property'){
+      var e = jsfuck.encode(node.value);
+      node.type = 'UnaryExpression';
+      node.operator = ''
+      node.argument = recast.parse(e).program.body.pop();
+      //node.loc.end = node.loc.end - 2
+    }
     return node;
+  },
+  ParenthesizedExpression: function (node){
+    console.log(node);
   },
   ThrowStatement: function (node) {
     return node;
