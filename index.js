@@ -80,14 +80,14 @@ var keywords = [
   'encodeURI'
 ];
 
-var props = ['getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement', 'subarray'];
+var props = ['not', 'getPrototypeOf', 'getOwnPropertyNames', 'hasOwnProperty', 'createElement', 'resolveWith', 'appendChild', 'setAttribute', 'cloneNode', 'innerHTML', 'lastChild', 'createHTMLDocument', 'body', 'childNodes', 'rejectWith', 'notifyWith'];
 keywords.forEach(function (key ) {
   var evald = eval(key);
   props = props.concat(Object.getOwnPropertyNames(evald));
   if (evald.prototype) props = props.concat(Object.getOwnPropertyNames(evald.prototype));
 });  
 keywords = keywords.concat(props);
-
+delete keywords[keywords.indexOf('catch')]
 var isKeyword = function(prop){
  return keywords.indexOf(prop) !== -1;
 }
@@ -161,12 +161,12 @@ function traverseNodeAddSwap(base, node) {
   base = base || { ___val : gen()};
   if (node.object){
     var name = node.object.name;
+  if (name === 'document')  return node.object.name = 'window.document';
     if (!isKeyword(name) && !node.skipped){
       substitute(node.object, base);
     } else{
-      node.object.skipped = true;
+      node.skipped = true;
     }
-    if (name === 'document') return node.object.name = 'window.document';
     if (node.property)  {
       var name = node.property.name;
       if (!isKeyword(node.property.name) && !node.property.skipped){
@@ -206,7 +206,14 @@ var firstPassHandlers = {
   LogicalExpression: function (node) {
     return node;
   },
-  BinaryExpression: function(node) {
+  BinaryExpression: function(node, parent) {
+    if (parent.type === 'Property') {
+     if (node.left.raw && node.right.raw){
+      var code = eval(node.left.raw + " " + node.operator + " " + node.right.raw);
+      globals[code] = globals[code] || { ___val: gen() }
+     }
+    
+    }
     return node;
   },
   Identifier: function(node, parent) {
@@ -289,8 +296,8 @@ var secondPassHandlers = {
     
     return node;
   },
-  Property: function (node) {
-    substitute(node.key);
+  Property: function (node, parent) {
+    //substitute(node.key);
     substitute(node.value);
     return node;
   },
@@ -498,7 +505,7 @@ var thirdPassHandlers = {
   },
   Literal: function (node, parent) {
     var found = findNested(globals, node.value);
-    if (found.length && parent.type === 'Property'){
+    if (found.length && parent.type === 'Property' ){
       node.value = found.pop().___val;
     }
     return node;
@@ -512,7 +519,7 @@ var thirdPassHandlers = {
 }
 var code = fs.readFileSync(process.env.INPUT_FILE || 'input.js').toString();
 var ast = recast.parse(code);
-if (process.env.DEBUG) console.log(ast.program.body);
+if (process.env.DEBUG) console.log(JSON.stringify(ast.program.body[2].declarations));
     // First Pass
 estraverse.traverse(ast.program, {
   enter: function(node, parent) {
