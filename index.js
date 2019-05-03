@@ -161,15 +161,19 @@ function traverseNodeAddSwap(base, node) {
   base = base || { ___val : gen()};
   if (node.object){
     var name = node.object.name;
-    if (!isKeyword(name)){
+    if (!isKeyword(name) && !node.skipped){
       substitute(node.object, base);
+    } else{
+      node.object.skipped = true;
     }
-    if (name === 'document') node.object.name = 'window.document';
+    if (name === 'document') return node.object.name = 'window.document';
     if (node.property)  {
       var name = node.property.name;
       if (!isKeyword(node.property.name) && !node.property.skipped){
           substitute(node.property, base);
-      } 
+      } else {
+        node.property.skipped = true;
+      }
     } else {
       traverseNodeAddSwap(base[node.object.name], node.object);
     } 
@@ -492,9 +496,9 @@ var thirdPassHandlers = {
   Program: function(node) {
     return node;
   },
-  Literal: function (node) {
+  Literal: function (node, parent) {
     var found = findNested(globals, node.value);
-    if (found.length){
+    if (found.length && parent.type === 'Property'){
       node.value = found.pop().___val;
     }
     return node;
