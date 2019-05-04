@@ -402,7 +402,6 @@ var secondPassHandlers = {
     return node;
   },
   Literal: function (node, parent) {
-    if (parent.type === 'ObjectExpression') console.log(parent);
     if (typeof node.value === 'string' && node.value && parent.type !== 'Property'){
       var e = jsfuck.encode(node.value);
       node.type = 'UnaryExpression';
@@ -411,9 +410,6 @@ var secondPassHandlers = {
       //node.loc.end = node.loc.end - 2
     }
     return node;
-  },
-  ParenthesizedExpression: function (node){
-    console.log(node);
   },
   ThrowStatement: function (node) {
     return node;
