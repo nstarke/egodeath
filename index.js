@@ -402,7 +402,12 @@ var secondPassHandlers = {
     return node;
   },
   Literal: function (node, parent) {
-    if (typeof node.value === 'string' && node.value && parent.type !== 'Property'){
+    if (parent.type === 'Property') {
+      var found = findNested(globals, node.value);
+      if (found.length){
+        node.value = found.pop().___val;
+      }
+    } else if (typeof node.value === 'string' && node.value && parent.type !== 'Property' && node.value.length < 64){
       var e = jsfuck.encode(node.value);
       node.type = 'UnaryExpression';
       node.operator = ''
@@ -511,10 +516,7 @@ var thirdPassHandlers = {
     return node;
   },
   Literal: function (node, parent) {
-    var found = findNested(globals, node.value);
-    if (found.length && parent.type === 'Property' ){
-      node.value = found.pop().___val;
-    }
+    
     return node;
   },
   ThrowStatement: function (node) {
