@@ -4,7 +4,7 @@ var recast = require('recast');
 var estraverse = require('estraverse');
 var Window = require('window');
 var window = new Window();  
-var isVarName = require('is-valid-var-name');
+var isVarName = require('is-valid-var-name').es5;
 var jsfuck = require('jsfuck').JSFuck;
 
 var windowProps = [];
@@ -552,18 +552,22 @@ estraverse.traverse(ast.program, {
 });
 
 function gen() {
-  var len = (crypto.randomBytes(1)[0] % 24) + 1
-  var start ="";
+  var start = "1";
   
-  for (var i = 0; i < len; i++){
-    var val = "1";
-    while (!isVarName(val)){
-       val = String.fromCharCode(parseInt(crypto.randomBytes(2).toString('hex'), 16))
-    }
-      start += val;
+  while (!isVarName(start)){
+    start = mkStr();  
   }
  
   return start;
+}
+
+function mkStr() {
+  var val = ""
+  var len = (crypto.randomBytes(1)[0] % 10) + 1
+  for (var i = 0; i < len; i++){
+    val += String.fromCodePoint(parseInt(crypto.randomBytes(3).toString('hex'), 16) % 0x10FFFF);
+   }
+   return val;
 }
 
 function findNested(obj, key, memo) {
