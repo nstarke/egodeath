@@ -17,6 +17,7 @@ import { applyCommaExpressions } from './transforms/commaExpressions';
 import { applyContextExhaustion } from './transforms/contextExhaustion';
 import { applyAntiDebug } from './transforms/antiDebug';
 import { applyTripwires } from './transforms/tripwires';
+import { applyNoiseInjection } from './transforms/noiseInjection';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 const { minify_sync } = require('terser');
@@ -114,9 +115,14 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
 
   // Punctured program tripwires (Paper 4: Sahai & Waters)
   // Hidden checks that trigger corruption on secret inputs.
-  // Runs early so tripwire code gets obfuscated by all subsequent passes.
   if (budget.maxBloatRatio > 3) {
     applyTripwires(ast);
+  }
+
+  // LPN-inspired noise injection (Paper 7: Jain, Lin, Sahai)
+  // Adds and cancels random noise through split paths.
+  if (budget.maxBloatRatio > 5) {
+    applyNoiseInjection(ast);
   }
 
   // Pre-transforms are gated on budget. At very low budgets, structural
