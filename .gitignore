@@ -1,2 +1,6 @@
 node_modules
 sjcl
+dist
+dist-tools
+.tmp-packages
+.claude
