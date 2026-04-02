@@ -9,6 +9,8 @@ import { thirdPassHandlers } from './passes/thirdPass';
 import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
 import { applyOpaquePredicates } from './transforms/opaquePredicates';
 import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
+import { applyGlobalVariableEncoding } from './transforms/globalVariableEncoding';
+import { applyPropertyKeyEncoding } from './transforms/propertyKeyEncoding';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -116,9 +118,19 @@ export function obfuscate(code: string): string {
     fallback: 'iteration',
   } as any);
 
+  // Post-transform: global variable encoding
+  // Wraps globals like Math, Array, Object in eval("Name<suffix>".replace(...))
+  // Runs after identifier passes (which skip globals) but before string array extraction
+  applyGlobalVariableEncoding(ast);
+
+  // Post-transform: property key encoding
+  // Converts obj.foo to obj[var] where var holds "foo<suffix>".replace(...)
+  // Runs after global encoding so global method names also get encoded
+  applyPropertyKeyEncoding(ast);
+
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
-  // Runs after all passes so it captures the final string values
+  // Runs last so it captures all strings including global+property name strings
   applyStringArrayExtraction(ast);
 
   // Prepend console stubs

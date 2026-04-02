@@ -147,12 +147,18 @@ describe('applyOpaquePredicates', () => {
       a = a * 4;
       return a;
     }`;
-    const ast = parse(code);
-    applyOpaquePredicates(ast);
-    const out = recast.print(ast).code;
-
-    // Should have probe inits (Math.random)
-    expect(out).toContain('Math.random()');
+    // Run multiple times since injection is probabilistic (~30% per statement)
+    let injected = false;
+    for (let i = 0; i < 20; i++) {
+      const ast = parse(code);
+      applyOpaquePredicates(ast);
+      const out = recast.print(ast).code;
+      if (out.includes('Math.random()')) {
+        injected = true;
+        break;
+      }
+    }
+    expect(injected).toBe(true);
   });
 
   it('preserves functional correctness', () => {

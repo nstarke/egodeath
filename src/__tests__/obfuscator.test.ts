@@ -22,11 +22,13 @@ describe('obfuscate', () => {
     expect(result).not.toContain('mySpecialVariable');
   });
 
-  it('preserves keywords like Array and Object', () => {
+  it('encodes global keywords like Array and Object (not readable)', () => {
     const code = 'var x = new Array(); var y = Object.keys({});';
     const result = obfuscate(code);
-    expect(result).toContain('Array');
-    expect(result).toContain('Object');
+    // Globals are now eval-encoded, so they should NOT appear as plain identifiers
+    // but the code should contain eval (used to recover them at runtime)
+    expect(result).toContain('eval');
+    expect(result).toContain('replace');
   });
 
   it('handles function declarations', () => {
