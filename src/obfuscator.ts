@@ -104,28 +104,33 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     parser: require('recast/parsers/babel'),
   });
 
-  // Pre-transform: control flow flattening
-  // Runs before identifier passes so that state variables get obfuscated
-  applyControlFlowFlattening(ast, budget);
+  // Pre-transforms are gated on budget. At very low budgets, structural
+  // transforms are skipped entirely — only identifier renaming + string
+  // array extraction run, providing baseline obfuscation.
+  if (budget.maxBloatRatio > 3) {
+    // Control flow flattening: while/switch state machines
+    applyControlFlowFlattening(ast, budget);
+  }
 
-  // Pre-transform: opaque predicates
-  // Injects fake branches and dead code behind mathematically opaque conditions
-  applyOpaquePredicates(ast, budget);
+  if (budget.maxBloatRatio > 3) {
+    // Opaque predicates: fake branches with math conditions
+    applyOpaquePredicates(ast, budget);
+  }
 
-  // Pre-transform: proxy functions
-  // Wraps all calls through dispatcher functions, breaking call graph analysis
-  // Runs before identifier passes so proxy names get obfuscated
-  applyProxyFunctions(ast);
+  if (budget.maxBloatRatio > 5) {
+    // Proxy functions: route all calls through dispatchers
+    applyProxyFunctions(ast);
+  }
 
-  // Pre-transform: context window exhaustion
-  // Bloats code with nested ternaries, void chains, conditional noise
-  // Runs before comma merging so bloated expressions get merged too
-  applyContextExhaustion(ast, budget);
+  if (budget.maxBloatRatio > 8) {
+    // Context window exhaustion: ternary/void noise
+    applyContextExhaustion(ast, budget);
+  }
 
-  // Pre-transform: comma expression merging
-  // Collapses consecutive expression statements into comma expressions
-  // Runs after all structural transforms so it can merge everything
-  applyCommaExpressions(ast);
+  if (budget.maxBloatRatio > 3) {
+    // Comma expression merging
+    applyCommaExpressions(ast);
+  }
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
@@ -144,19 +149,22 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     fallback: 'iteration',
   } as any);
 
-  // Post-transform: global variable encoding
-  // Wraps globals like Math, Array, Object in eval("Name<suffix>".replace(...))
-  // Runs after identifier passes (which skip globals) but before string array extraction
-  applyGlobalVariableEncoding(ast);
+  // Post-transforms are gated on budget — they add significant volume
+  // through string generation (each property/global adds 2+ strings to the array)
+  if (budget.maxBloatRatio > 10) {
+    // Post-transform: global variable encoding
+    applyGlobalVariableEncoding(ast);
+  }
 
-  // Post-transform: property key encoding
-  // Converts obj.foo to obj[var] where var holds "foo<suffix>".replace(...)
-  // Runs after global encoding so global method names also get encoded
-  applyPropertyKeyEncoding(ast);
+  if (budget.maxBloatRatio > 5) {
+    // Post-transform: property key encoding
+    applyPropertyKeyEncoding(ast);
+  }
 
-  // Post-transform: number encoding
-  // Replaces numeric literals with equivalent bitwise/arithmetic expressions
-  applyNumberEncoding(ast);
+  if (budget.maxBloatRatio > 3) {
+    // Post-transform: number encoding
+    applyNumberEncoding(ast);
+  }
 
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
