@@ -11,6 +11,7 @@ import { applyOpaquePredicates } from './transforms/opaquePredicates';
 import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
 import { applyGlobalVariableEncoding } from './transforms/globalVariableEncoding';
 import { applyPropertyKeyEncoding } from './transforms/propertyKeyEncoding';
+import { applyProxyFunctions } from './transforms/proxyFunctions';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -100,6 +101,11 @@ export function obfuscate(code: string): string {
   // Pre-transform: opaque predicates
   // Injects fake branches and dead code behind mathematically opaque conditions
   applyOpaquePredicates(ast);
+
+  // Pre-transform: proxy functions
+  // Wraps all calls through dispatcher functions, breaking call graph analysis
+  // Runs before identifier passes so proxy names get obfuscated
+  applyProxyFunctions(ast);
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
