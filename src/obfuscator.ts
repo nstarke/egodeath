@@ -13,6 +13,7 @@ import { applyGlobalVariableEncoding } from './transforms/globalVariableEncoding
 import { applyPropertyKeyEncoding } from './transforms/propertyKeyEncoding';
 import { applyProxyFunctions } from './transforms/proxyFunctions';
 import { applyNumberEncoding } from './transforms/numberEncoding';
+import { applyCommaExpressions } from './transforms/commaExpressions';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -107,6 +108,11 @@ export function obfuscate(code: string): string {
   // Wraps all calls through dispatcher functions, breaking call graph analysis
   // Runs before identifier passes so proxy names get obfuscated
   applyProxyFunctions(ast);
+
+  // Pre-transform: comma expression merging
+  // Collapses consecutive expression statements into comma expressions
+  // Runs after all structural transforms so it can merge CFF switch case bodies
+  applyCommaExpressions(ast);
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
