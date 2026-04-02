@@ -44,6 +44,8 @@ const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
 
 // Minimum number of top-level statements to bother flattening
 const MIN_STATEMENTS = 3;
+// Maximum statements — very large functions create pathological switch statements
+const MAX_STATEMENTS = 100;
 
 interface CaseBlock {
   stateId: number;
@@ -385,8 +387,9 @@ function buildStateMachine(
  */
 export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[] | null {
   if (body.length < MIN_STATEMENTS) return null;
+  if (body.length > MAX_STATEMENTS) return null;
 
-  // Don't flatten if body contains imports/exports (module-level only)
+  // Don't flatten if body contains constructs that break when hoisted to var
   for (const stmt of body) {
     if (
       stmt.type === 'ImportDeclaration' ||
@@ -394,6 +397,15 @@ export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[]
       stmt.type === 'ExportDefaultDeclaration' ||
       stmt.type === 'ExportAllDeclaration'
     ) {
+      return null;
+    }
+    // let/const rely on block scoping and temporal dead zone —
+    // converting to var changes semantics and breaks cross-module code
+    if (stmt.type === 'VariableDeclaration' && (stmt.kind === 'let' || stmt.kind === 'const')) {
+      return null;
+    }
+    // Class declarations also can't be hoisted (TDZ semantics)
+    if (stmt.type === 'ClassDeclaration') {
       return null;
     }
   }

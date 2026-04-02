@@ -233,8 +233,12 @@ function shouldEncode(value: number): boolean {
  */
 function shouldSkipPosition(node: any, parent: any): boolean {
   // Switch case test values — some engines optimize literal cases
-  // We can still encode these, but skip for safety
   if (parent.type === 'SwitchCase' && parent.test === node) return true;
+  // Object property keys: {3: "value"} — expressions not allowed without []
+  if ((parent.type === 'Property' || parent.type === 'ObjectProperty') && parent.key === node) return true;
+  // Method/property definitions in classes with numeric keys
+  if ((parent.type === 'MethodDefinition' || parent.type === 'ClassMethod' ||
+       parent.type === 'ClassProperty' || parent.type === 'PropertyDefinition') && parent.key === node) return true;
   return false;
 }
 

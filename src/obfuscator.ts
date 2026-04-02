@@ -187,7 +187,15 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
       output = result.code;
     }
   } catch {
-    // If minification fails, return the unminified output
+    // Terser can't parse some obfuscated constructs — fall back to
+    // regex-based whitespace stripping that doesn't require parsing
+    output = output
+      .replace(/\/\/[^\n]*/g, '')           // strip line comments
+      .replace(/\/\*[\s\S]*?\*\//g, '')     // strip block comments
+      .replace(/^\s+/gm, '')               // strip leading whitespace
+      .replace(/\s*\n\s*/g, '\n')          // collapse blank lines
+      .replace(/\n+/g, '')                 // join all lines
+      .replace(/\s{2,}/g, ' ');            // collapse multiple spaces
   }
 
   return output;

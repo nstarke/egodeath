@@ -137,20 +137,26 @@ export function applyProxyFunctions(ast: any): void {
   const fcName = gen();
   const mcName = gen();
 
-  // Build proxy function declarations
+  // Build proxy function declarations.
+  // Use Function.prototype.apply/call for resilience — these references
+  // are captured once and can't be broken by property key encoding.
   const fcDecl = buildProxyDecl(fcName, `function() {
+    var _apply = Function.prototype.apply;
     var fn = arguments[0];
     var a = [];
     for (var i = 1; i < arguments.length; i++) a.push(arguments[i]);
-    return fn.apply(void 0, a);
+    return _apply.call(fn, void 0, a);
   };`);
 
   const mcDecl = buildProxyDecl(mcName, `function() {
+    var _apply = Function.prototype.apply;
     var o = arguments[0];
     var p = arguments[1];
     var a = [];
     for (var i = 2; i < arguments.length; i++) a.push(arguments[i]);
-    return o[p].apply(o, a);
+    var m = o[p];
+    if (typeof m === "function") return _apply.call(m, o, a);
+    return m;
   };`);
 
   // Collect replacements

@@ -262,25 +262,60 @@ export const secondPassHandlers: PassHandlerMap = {
     return node;
   },
 
-  TemplateLiteral(node) { return node; },
-  TaggedTemplateExpression(node) { return node; },
+  TemplateLiteral(node) {
+    // Substitute identifiers in template expressions: `${foo}`
+    if (node.expressions) {
+      node.expressions.forEach((expr: ASTNode) => substitute(expr));
+    }
+    return node;
+  },
+
+  TaggedTemplateExpression(node) {
+    substitute(node.tag);
+    return node;
+  },
+
   TemplateElement(node) { return node; },
 
-  ObjectPattern(node) { return node; },
-  ArrayPattern(node) { return node; },
+  ObjectPattern(node) {
+    // Substitute value targets in destructuring: var {a: localVar} = obj
+    if (node.properties) {
+      for (const prop of node.properties) {
+        if (prop.type === 'RestElement') {
+          substitute(prop.argument);
+        } else if (prop.value) {
+          substitute(prop.value);
+        }
+      }
+    }
+    return node;
+  },
+
+  ArrayPattern(node) {
+    // Substitute elements in array destructuring: var [a, b] = arr
+    if (node.elements) {
+      node.elements.forEach((el: ASTNode) => {
+        if (el) substitute(el);
+      });
+    }
+    return node;
+  },
 
   AssignmentPattern(node) {
     substitute(node.left);
+    substitute(node.right);
     return node;
   },
 
   ClassDeclaration(node) {
     substitute(node.id);
+    substitute(node.superClass);
     return node;
   },
 
   ClassExpression(node) {
     substitute(node.id);
+    substitute(node.superClass);
     return node;
   },
 
