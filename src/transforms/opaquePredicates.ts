@@ -404,7 +404,8 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
         consequent: { type: 'BlockStatement', body: [stmt] },
         alternate: {
           type: 'BlockStatement',
-          body: generateDeadCodeBlock(scopeVars, deadCodeSize),
+          // Paper 3: dead code mutated from real statements (structurally identical)
+          body: generateDeadCodeBlock(scopeVars, deadCodeSize, stmts),
         },
       });
       continue;
@@ -417,7 +418,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
       newBody.push({
         type: 'IfStatement',
         test: pred.expr,
-        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize) },
+        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize, stmts) },
         alternate: null,
       });
     }
@@ -440,7 +441,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
       newBody.splice(pos, 0, {
         type: 'IfStatement',
         test: pred.expr,
-        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize) },
+        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize, stmts) },
         alternate: null,
       });
     }

@@ -383,10 +383,23 @@ const TEMPLATES: DeadCodeTemplate[] = [
 
 /**
  * Generate a realistic dead code block.
- * @param scopeVars  Variable names from surrounding scope to reference.
- * @param count      Number of templates to combine (1-3).
+ * If realStatements are provided, ~50% of the time dead code is generated
+ * by MUTATING real code (Paper 3: structurally identical dead code).
+ * Otherwise falls back to template-based generation.
+ *
+ * @param scopeVars       Variable names from surrounding scope to reference.
+ * @param count           Number of templates to combine (1-3).
+ * @param realStatements  Optional: real statements from the same scope to mutate.
  */
-export function generateDeadCode(scopeVars: string[] = [], count?: number): any[] {
+export function generateDeadCode(
+  scopeVars: string[] = [],
+  count?: number,
+  realStatements?: any[],
+): any[] {
+  // 50% chance: use mutation-based dead code when real statements available
+  if (realStatements && realStatements.length >= 2 && randInt(0, 1) === 0) {
+    return generateMutatedCode(realStatements);
+  }
   const n = count || randInt(1, 2);
   const templates = pickN(TEMPLATES, n);
   const stmts: any[] = [];
@@ -394,6 +407,187 @@ export function generateDeadCode(scopeVars: string[] = [], count?: number): any[
     stmts.push(...tmpl(scopeVars));
   }
   return stmts;
+}
+
+// ==== Mutation-based dead code (Paper 3: Subgroup Elimination) ====
+//
+// Instead of generating dead code from templates, we clone REAL statements
+// and mutate them: change constants, swap operators, rename variables,
+// invert conditions. The result has identical AST structure to the real
+// code — same node types, same nesting depth, same expression patterns —
+// but operates on different values. Static analysis cannot distinguish
+// dead from real based on structure alone.
+
+/** Operators that can be swapped for each other */
+const BINARY_OP_GROUPS: string[][] = [
+  ['+', '-'],
+  ['*', '/'],
+  ['<', '>', '<=', '>='],
+  ['===', '!=='],
+  ['==', '!='],
+  ['&', '|'],
+  ['^', '&'],
+  ['<<', '>>'],
+];
+
+const ASSIGN_OP_SWAPS: { [key: string]: string[] } = {
+  '+=': ['-=', '*='],
+  '-=': ['+=', '*='],
+  '*=': ['+=', '-='],
+  '=': ['='],
+};
+
+const UNARY_OP_SWAPS: { [key: string]: string[] } = {
+  '++': ['--'],
+  '--': ['++'],
+  '!': ['~', '!'],
+  '~': ['!', '~'],
+  '-': ['+', '-'],
+  '+': ['-', '+'],
+  'typeof': ['typeof'],
+  'void': ['void'],
+};
+
+/**
+ * Deep-clone an AST node, mutating it along the way:
+ * - Numeric literals: perturbed by a random offset
+ * - String literals: replaced with random strings of same length
+ * - Identifiers (non-keyword): renamed to fresh generated names
+ * - Binary operators: swapped within equivalence groups
+ * - Unary operators: swapped within equivalence groups
+ * - Boolean literals: inverted
+ */
+function mutateNode(node: any, nameMap: Map<string, string>): any {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(child => mutateNode(child, nameMap));
+
+  const clone: any = {};
+  for (const key of Object.keys(node)) {
+    // Skip location/metadata
+    if (key === 'loc' || key === 'start' || key === 'end' ||
+        key === 'extra' || key === 'comments' || key === 'leadingComments' ||
+        key === 'trailingComments' || key === 'innerComments') {
+      continue;
+    }
+    clone[key] = mutateNode(node[key], nameMap);
+  }
+
+  // Mutate based on node type
+  switch (clone.type) {
+    case 'NumericLiteral':
+    case 'Literal':
+      if (typeof clone.value === 'number' && isFinite(clone.value)) {
+        // Perturb: change by ±1 to ±50, or multiply by 2-5
+        if (randInt(0, 1) === 0) {
+          clone.value = clone.value + randInt(-50, 50);
+        } else {
+          clone.value = clone.value * randInt(2, 5);
+        }
+        if (clone.raw) delete clone.raw;
+        if (clone.extra) delete clone.extra;
+      }
+      if (typeof clone.value === 'string') {
+        // Replace with random string of similar length
+        clone.value = gen().substring(0, Math.max(1, clone.value.length));
+        if (clone.raw) delete clone.raw;
+        if (clone.extra) delete clone.extra;
+      }
+      break;
+
+    case 'StringLiteral':
+      clone.value = gen().substring(0, Math.max(1, clone.value.length));
+      if (clone.raw) delete clone.raw;
+      if (clone.extra) delete clone.extra;
+      break;
+
+    case 'BooleanLiteral':
+      clone.value = !clone.value;
+      break;
+
+    case 'Identifier':
+      // Rename non-keyword identifiers to fresh names
+      if (clone.name && clone.name !== 'undefined' && clone.name !== 'null' &&
+          clone.name !== 'true' && clone.name !== 'false' &&
+          clone.name !== 'arguments' && clone.name !== 'this') {
+        if (!nameMap.has(clone.name)) {
+          nameMap.set(clone.name, gen());
+        }
+        clone.name = nameMap.get(clone.name)!;
+      }
+      break;
+
+    case 'BinaryExpression':
+    case 'LogicalExpression':
+      if (clone.operator) {
+        const group = BINARY_OP_GROUPS.find(g => g.includes(clone.operator));
+        if (group && group.length > 1) {
+          const others = group.filter(op => op !== clone.operator);
+          clone.operator = pick(others);
+        }
+      }
+      break;
+
+    case 'AssignmentExpression':
+      if (clone.operator && ASSIGN_OP_SWAPS[clone.operator]) {
+        const swaps = ASSIGN_OP_SWAPS[clone.operator];
+        clone.operator = pick(swaps);
+      }
+      break;
+
+    case 'UpdateExpression':
+      if (clone.operator && UNARY_OP_SWAPS[clone.operator]) {
+        clone.operator = pick(UNARY_OP_SWAPS[clone.operator]);
+      }
+      break;
+
+    case 'UnaryExpression':
+      if (clone.operator && UNARY_OP_SWAPS[clone.operator]) {
+        clone.operator = pick(UNARY_OP_SWAPS[clone.operator]);
+      }
+      break;
+  }
+
+  return clone;
+}
+
+/**
+ * Generate dead code by cloning and mutating real statements.
+ *
+ * Takes 2-4 consecutive real statements, deep-clones them, and mutates:
+ * - All identifiers get fresh names (via a consistent rename map)
+ * - Numeric constants are perturbed
+ * - String literals are replaced
+ * - Operators are swapped within equivalence groups
+ * - Booleans are flipped
+ *
+ * The result has IDENTICAL AST structure to the original statements
+ * but computes something completely different on different variables.
+ */
+function generateMutatedCode(realStatements: any[]): any[] {
+  // Pick a random slice of 2-4 consecutive statements
+  const sliceLen = Math.min(realStatements.length, randInt(2, 4));
+  const startIdx = randInt(0, Math.max(0, realStatements.length - sliceLen));
+  const slice = realStatements.slice(startIdx, startIdx + sliceLen);
+
+  // Clone and mutate with a fresh name mapping
+  const nameMap = new Map<string, string>();
+  const mutated = slice.map(stmt => mutateNode(stmt, nameMap));
+
+  // Wrap in a var declaration block so the fresh variables are declared
+  const varDecls: any[] = [];
+  for (const [, newName] of nameMap) {
+    varDecls.push({
+      type: 'VariableDeclaration',
+      kind: 'var',
+      declarations: [{
+        type: 'VariableDeclarator',
+        id: id(newName),
+        init: num(randInt(0, 100)),
+      }],
+    });
+  }
+
+  return [...varDecls, ...mutated];
 }
 
 /**
