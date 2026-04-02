@@ -5,22 +5,52 @@ import { gen } from '../random';
 
 // jsfuck replaced with compact XOR+hex encoding
 
-// ---- XOR+Hex encoding ----
+// ---- Chained XOR+Hex encoding (Paper 2: Kilian-style) ----
+//
+// Each string's XOR key depends on the decoded content of the PREVIOUS
+// string in the array. This creates a decryption chain: you cannot
+// decode string N without first decoding strings 0 through N-1.
+//
+// Chain: key[0] = seed
+//        key[i] = (key[i-1] ^ simpleHash(string[i-1]) ^ (i * prime)) & 0xFF || 1
+//
+// At runtime, the accessor must decode the entire chain on first call,
+// then cache all results. Individual subsequent accesses are O(1).
 
 /**
- * Derive a per-string XOR key from the array index.
- * Uses a prime multiplier and seed so each position gets a different key.
+ * Simple hash of a string — sum of char codes modulo 256.
+ * Used to derive the chain key for the next entry.
  */
-function deriveKey(index: number, prime: number, seed: number): number {
-  return ((index * prime + seed) & 0xFF) || 1; // avoid 0 (no-op XOR)
+function simpleStringHash(str: string): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h + str.charCodeAt(i)) & 0xFF;
+  }
+  return h;
 }
 
 /**
- * XOR-encode a string and return it as a hex string.
- * Each character is XOR'd with a key derived from the array index.
+ * Compute the chained XOR keys for all strings in order.
+ * Returns an array of keys where key[i] depends on the decoded string[i-1].
  */
-function xorHexEncode(str: string, index: number, prime: number, seed: number): string {
-  const key = deriveKey(index, prime, seed);
+function computeChainKeys(strings: string[], seed: number, prime: number): number[] {
+  const keys: number[] = [];
+  let prevKey = seed;
+
+  for (let i = 0; i < strings.length; i++) {
+    const key = ((prevKey ^ (i * prime)) & 0xFF) || 1;
+    keys.push(key);
+    // Chain: next key depends on current string's content
+    prevKey = (key ^ simpleStringHash(strings[i])) & 0xFF;
+  }
+
+  return keys;
+}
+
+/**
+ * XOR-encode a string with a given key and return as hex.
+ */
+function xorHexEncodeWithKey(str: string, key: number): string {
   let hex = '';
   for (let i = 0; i < str.length; i++) {
     const encoded = str.charCodeAt(i) ^ key;
@@ -191,20 +221,16 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   // Assign final indices (post-rotation order)
   strings.forEach((s, i) => stringMap.set(s, i));
 
-  // ---- Rotation + base offset ----
+  // ---- Base offset (no rotation — chaining requires sequential order) ----
 
-  const rotation = randInt(1, Math.max(1, strings.length));
   const baseOffset = randInt(50, 500);
 
-  // Pre-rotate: shift the array backwards by `rotation` so that after
-  // the runtime forward-rotation, indices line up correctly.
-  // Forward rotation: R times push(shift()) turns [a,b,c,d] with R=1 into [b,c,d,a]
-  // We need: after rotation, arr[i] === strings[i]
-  // So we store the array rotated backwards: last R items move to the front
-  const preRotated = [
-    ...strings.slice(strings.length - rotation),
-    ...strings.slice(0, strings.length - rotation),
-  ];
+  // With chained encoding (Paper 2), each entry's key depends on the
+  // decoded content of the previous entry. This means the array must
+  // stay in its build-time order — rotation would break the chain.
+  // The chain itself provides protection: you can't decode entry N
+  // without first decoding entries 0 through N-1.
+  const orderedStrings = strings; // shuffled but not rotated
 
   // ---- Pass 2: Replace string nodes with accessor calls ----
 
@@ -240,16 +266,14 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   // The encoding mode is per-string: first `jsfuckLimit` strings use jsfuck,
   // the rest use XOR+hex. This lets the budget control the bloat.
 
-  // All strings use XOR+hex encoding: each char is XOR'd with a
-  // position-derived key and hex-encoded. The accessor decodes at runtime.
-  // This gives ~2x expansion (vs jsfuck's ~1000x) while remaining fully opaque.
-  //
-  // We encode using the preRotated index directly. The accessor derives
-  // the preRotated index from the post-rotation index using the known
-  // rotation offset and array length.
-  const arrayLen = preRotated.length;
-  const arrayElements = preRotated.map((s, idx) => {
-    const hex = xorHexEncode(s, idx, xorPrime, xorSeed);
+  // Chained XOR+hex encoding (Paper 2: Kilian-style randomization).
+  // Each string's key depends on the decoded content of the previous string.
+  // The orderedStrings array is encoded with chained keys — decoding entry N
+  // requires knowing the decoded content of entry N-1.
+  const arrayLen = orderedStrings.length;
+  const chainKeys = computeChainKeys(orderedStrings, xorSeed, xorPrime);
+  const arrayElements = orderedStrings.map((s, idx) => {
+    const hex = xorHexEncodeWithKey(s, chainKeys[idx]);
     return { type: 'StringLiteral', value: hex };
   });
 
@@ -266,99 +290,40 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
     }],
   };
 
-  // 2. Rotation IIFE: (function(a, n) { while(n--) a.push(a.shift()); })(_arr, R);
-  const rotationIIFE: any = {
-    type: 'ExpressionStatement',
-    expression: {
-      type: 'CallExpression',
-      callee: {
-        type: 'FunctionExpression',
-        id: null,
-        params: [
-          { type: 'Identifier', name: 'a' },
-          { type: 'Identifier', name: 'n' },
-        ],
-        body: {
-          type: 'BlockStatement',
-          body: [{
-            type: 'WhileStatement',
-            test: {
-              type: 'UpdateExpression',
-              operator: '--',
-              argument: { type: 'Identifier', name: 'n' },
-              prefix: false,
-            },
-            body: {
-              type: 'BlockStatement',
-              body: [{
-                type: 'ExpressionStatement',
-                expression: {
-                  type: 'CallExpression',
-                  callee: {
-                    type: 'MemberExpression',
-                    object: { type: 'Identifier', name: 'a' },
-                    property: { type: 'Identifier', name: 'push' },
-                    computed: false,
-                  },
-                  arguments: [{
-                    type: 'CallExpression',
-                    callee: {
-                      type: 'MemberExpression',
-                      object: { type: 'Identifier', name: 'a' },
-                      property: { type: 'Identifier', name: 'shift' },
-                      computed: false,
-                    },
-                    arguments: [],
-                  }],
-                },
-              }],
-            },
-          }],
-        },
-      },
-      arguments: [
-        { type: 'Identifier', name: arrayName },
-        { type: 'NumericLiteral', value: rotation },
-      ],
-    },
-  };
-
-  // 3. Accessor function with XOR+hex decoder
+  // 2. Chained accessor function (Paper 2: Kilian-style)
   //
-  // If all strings are jsfuck (expressions that evaluate directly), the
-  // accessor just indexes: return _arr[i - BASE];
+  // On first call, decodes the ENTIRE chain in order — key for entry N
+  // depends on the decoded content of entry N-1. After the chain is
+  // fully decoded, all strings are cached for O(1) access.
   //
-  // If any strings use XOR+hex, the accessor decodes them:
-  //   function(i) {
-  //     var idx = i - BASE;
-  //     var v = _arr[idx];
-  //     if (typeof v !== "string") return v;  // jsfuck already evaluated
-  //     var k = ((idx * PRIME + SEED) & 255) || 1;
-  //     var s = "";
-  //     for (var j = 0; j < v.length; j += 2)
-  //       s += String.fromCharCode(parseInt(v.substr(j, 2), 16) ^ k);
-  //     return _arr[idx] = s;  // cache decoded result
-  //   }
-  //
-  // The cache assignment (_arr[idx] = s) means each string is only decoded
-  // once — subsequent accesses return the cached value directly.
-
-  // Accessor function: decodes XOR+hex at runtime with a decode cache.
-  // Computes the preRotated index from the post-rotation array index
-  // to derive the correct XOR key, then hex-decodes and XOR-decodes.
+  // The chain decryption uses the same simpleStringHash and key derivation
+  // as the build-time encoding, but in reverse (decode with the key,
+  // then derive the next key from the decoded content).
   const cacheName = gen();
-  const accessorCode = `var ${cacheName} = {};
+  const chainDecodedFlag = gen();
+
+  const accessorCode = `
+  var ${cacheName} = {};
+  var ${chainDecodedFlag} = false;
   var ${accessorName} = function(i) {
-    if (${cacheName}[i] !== void 0) return ${cacheName}[i];
-    var idx = i - ${baseOffset};
-    var v = ${arrayName}[idx];
-    var pidx = (idx + ${rotation}) % ${arrayLen};
-    var k = ((pidx * ${xorPrime} + ${xorSeed}) & 255) || 1;
-    var s = "";
-    for (var j = 0; j < v.length; j += 2)
-      s += String.fromCharCode(parseInt(v.substr(j, 2), 16) ^ k);
-    ${cacheName}[i] = s;
-    return s;
+    if (!${chainDecodedFlag}) {
+      var prevKey = ${xorSeed};
+      for (var ci = 0; ci < ${arrayLen}; ci++) {
+        var k = ((prevKey ^ (ci * ${xorPrime})) & 255) || 1;
+        var v = ${arrayName}[ci];
+        var s = "";
+        var h = 0;
+        for (var j = 0; j < v.length; j += 2) {
+          var ch = parseInt(v.substr(j, 2), 16) ^ k;
+          s += String.fromCharCode(ch);
+          h = (h + ch) & 255;
+        }
+        ${cacheName}[ci + ${baseOffset}] = s;
+        prevKey = (k ^ h) & 255;
+      }
+      ${chainDecodedFlag} = true;
+    }
+    return ${cacheName}[i];
   };`;
 
   const accessorAst = recast.parse(accessorCode, {
@@ -367,5 +332,5 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const accessorStmts = accessorAst.program.body; // cache decl + accessor decl
 
   // Prepend to program body (before everything else)
-  ast.program.body = [arrayDecl, rotationIIFE, ...accessorStmts, ...ast.program.body];
+  ast.program.body = [arrayDecl, ...accessorStmts, ...ast.program.body];
 }
