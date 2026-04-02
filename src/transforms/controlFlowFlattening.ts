@@ -318,7 +318,7 @@ function buildStateMachine(
  * Flatten the body of a single function.
  * Returns the new body statements (hoisted vars + state var + while/switch).
  */
-export function flattenFunctionBody(body: any[]): any[] | null {
+export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[] | null {
   if (body.length < MIN_STATEMENTS) return null;
 
   // Don't flatten if body contains imports/exports (module-level only)
@@ -344,7 +344,7 @@ export function flattenFunctionBody(body: any[]): any[] | null {
   // Inject dead switch cases that are never reached but look real
   const realStateIds = cases.map((c) => c.stateId);
   const scopeVars = collectScopeVars(body);
-  const deadCaseCount = Math.max(2, Math.floor(cases.length * 0.3));
+  const deadCaseCount = Math.max(2, Math.floor(cases.length * 0.3 * deadCodeMul));
   const deadIds = generateStateIds(deadCaseCount);
   for (const deadId of deadIds) {
     cases.push({
@@ -373,7 +373,9 @@ export function flattenFunctionBody(body: any[]): any[] | null {
  * Apply control flow flattening to all function bodies in an AST.
  * Modifies the AST in-place.
  */
-export function applyControlFlowFlattening(ast: any): void {
+export function applyControlFlowFlattening(ast: any, budget?: any): void {
+  const deadCodeMul = budget ? budget.deadCodeMultiplier : 1;
+
   estraverse.traverse(ast.program, {
     keys: EXTRA_VISITOR_KEYS,
     enter(node: any) {
@@ -384,7 +386,7 @@ export function applyControlFlowFlattening(ast: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        const flattened = flattenFunctionBody(node.body.body);
+        const flattened = flattenFunctionBody(node.body.body, deadCodeMul);
         if (flattened) {
           node.body.body = flattened;
         }

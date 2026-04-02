@@ -347,7 +347,9 @@ const VISITOR_KEYS: { [key: string]: string[] } = {
  *  2. Inject dead code behind always-false if blocks
  *  3. Insert the probe variable init at the top of the function
  */
-export function applyOpaquePredicates(ast: any): void {
+export function applyOpaquePredicates(ast: any, budget?: any): void {
+  const prob = budget ? budget.opaquePredicateProb : 0.30;
+
   estraverse.traverse(ast.program, {
     keys: VISITOR_KEYS,
     enter(node: any) {
@@ -358,14 +360,14 @@ export function applyOpaquePredicates(ast: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        injectPredicates(node.body);
+        injectPredicates(node.body, prob);
       }
     },
     fallback: 'iteration',
   } as any);
 }
 
-function injectPredicates(body: any): void {
+function injectPredicates(body: any, prob: number): void {
   const stmts: any[] = body.body;
   if (stmts.length < 2) return;
 
@@ -391,8 +393,8 @@ function injectPredicates(body: any): void {
       continue;
     }
 
-    // ~30% chance: wrap statement in always-true predicate
-    if (randInt(1, 10) <= 3) {
+    // Wrap statement in always-true predicate (probability from budget)
+    if (prob > 0 && randInt(1, 100) <= Math.round(prob * 100)) {
       const pred = generatePredicate(true);
       probeInits.push(pred.probeInit);
       newBody.push({
@@ -407,8 +409,8 @@ function injectPredicates(body: any): void {
       continue;
     }
 
-    // ~20% chance: inject dead code block before this statement
-    if (randInt(1, 10) <= 2) {
+    // Inject dead code block before this statement (lower probability)
+    if (prob > 0 && randInt(1, 100) <= Math.round(prob * 70)) {
       const pred = generatePredicate(false);
       probeInits.push(pred.probeInit);
       newBody.push({

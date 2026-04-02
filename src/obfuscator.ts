@@ -14,6 +14,8 @@ import { applyPropertyKeyEncoding } from './transforms/propertyKeyEncoding';
 import { applyProxyFunctions } from './transforms/proxyFunctions';
 import { applyNumberEncoding } from './transforms/numberEncoding';
 import { applyCommaExpressions } from './transforms/commaExpressions';
+import { applyContextExhaustion } from './transforms/contextExhaustion';
+import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -77,9 +79,13 @@ function runPass(ast: any, handlers: PassHandlerMap): void {
  * Obfuscate JavaScript source code.
  *
  * @param code - The JavaScript source code to obfuscate
+ * @param options - Optional configuration (target token budget, etc.)
  * @returns The obfuscated JavaScript code
  */
-export function obfuscate(code: string): string {
+export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): string {
+  const opts: ObfuscateOptions = { ...DEFAULT_OPTIONS, ...options };
+  const budget = computeBloatBudget(code.length, opts);
+
   // Reset global state for each run
   resetGlobals();
   resetWindowProps();
@@ -98,20 +104,25 @@ export function obfuscate(code: string): string {
 
   // Pre-transform: control flow flattening
   // Runs before identifier passes so that state variables get obfuscated
-  applyControlFlowFlattening(ast);
+  applyControlFlowFlattening(ast, budget);
 
   // Pre-transform: opaque predicates
   // Injects fake branches and dead code behind mathematically opaque conditions
-  applyOpaquePredicates(ast);
+  applyOpaquePredicates(ast, budget);
 
   // Pre-transform: proxy functions
   // Wraps all calls through dispatcher functions, breaking call graph analysis
   // Runs before identifier passes so proxy names get obfuscated
   applyProxyFunctions(ast);
 
+  // Pre-transform: context window exhaustion
+  // Bloats code with nested ternaries, void chains, conditional noise
+  // Runs before comma merging so bloated expressions get merged too
+  applyContextExhaustion(ast, budget);
+
   // Pre-transform: comma expression merging
   // Collapses consecutive expression statements into comma expressions
-  // Runs after all structural transforms so it can merge CFF switch case bodies
+  // Runs after all structural transforms so it can merge everything
   applyCommaExpressions(ast);
 
   // First Pass: catalog identifiers
@@ -148,7 +159,7 @@ export function obfuscate(code: string): string {
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
   // Runs last so it captures all strings including global+property name strings
-  applyStringArrayExtraction(ast);
+  applyStringArrayExtraction(ast, budget);
 
   // Prepend console stubs
   const consoleKeywords = buildConsoleKeywords();

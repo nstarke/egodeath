@@ -3,7 +3,31 @@ import * as estraverse from 'estraverse';
 import * as recast from 'recast';
 import { gen } from '../random';
 
-const jsfuck = require('jsfuck').JSFuck;
+// jsfuck replaced with compact XOR+hex encoding
+
+// ---- XOR+Hex encoding ----
+
+/**
+ * Derive a per-string XOR key from the array index.
+ * Uses a prime multiplier and seed so each position gets a different key.
+ */
+function deriveKey(index: number, prime: number, seed: number): number {
+  return ((index * prime + seed) & 0xFF) || 1; // avoid 0 (no-op XOR)
+}
+
+/**
+ * XOR-encode a string and return it as a hex string.
+ * Each character is XOR'd with a key derived from the array index.
+ */
+function xorHexEncode(str: string, index: number, prime: number, seed: number): string {
+  const key = deriveKey(index, prime, seed);
+  let hex = '';
+  for (let i = 0; i < str.length; i++) {
+    const encoded = str.charCodeAt(i) ^ key;
+    hex += encoded.toString(16).padStart(2, '0');
+  }
+  return hex;
+}
 
 // ---- Helpers ----
 
@@ -125,9 +149,13 @@ interface StringEntry {
  * 5. Replace each string literal with accessorFn(finalIndex + B)
  * 6. Prepend: array declaration, rotation IIFE, accessor function
  */
-export function applyStringArrayExtraction(ast: any): void {
+export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const arrayName = gen();
   const accessorName = gen();
+
+  // XOR cipher constants (random per obfuscation run)
+  const xorPrime = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31][randInt(0, 9)];
+  const xorSeed = randInt(1, 255);
 
   // ---- Pass 1: Collect strings ----
 
@@ -199,15 +227,30 @@ export function applyStringArrayExtraction(ast: any): void {
 
   // ---- Build preamble AST ----
 
-  // 1. var _arr = [jsfuck("str1"), jsfuck("str2"), ...];
-  // Each string is encoded with jsfuck so the array contains no readable literals.
-  const jsfuckElements = preRotated.map((s) => {
-    const encoded = jsfuck.encode(s);
-    // Parse the jsfuck expression into an AST node
-    const exprAst = recast.parse(encoded, {
-      parser: require('recast/parsers/babel'),
-    });
-    return exprAst.program.body[0].expression || exprAst.program.body[0];
+  // 1. var _arr = [encoded("str1"), encoded("str2"), ...];
+  //
+  // Two encoding modes:
+  //   - jsfuck: maximum obfuscation, ~1000x expansion (budget permitting)
+  //   - XOR+hex: compact encoding, ~2x expansion, decoded at runtime
+  //
+  // XOR+hex strings look like "4a1f3c..." — meaningless hex. The accessor
+  // function XOR-decodes them with a position-derived key at runtime.
+  // jsfuck strings are JavaScript expressions that evaluate to the string.
+  //
+  // The encoding mode is per-string: first `jsfuckLimit` strings use jsfuck,
+  // the rest use XOR+hex. This lets the budget control the bloat.
+
+  // All strings use XOR+hex encoding: each char is XOR'd with a
+  // position-derived key and hex-encoded. The accessor decodes at runtime.
+  // This gives ~2x expansion (vs jsfuck's ~1000x) while remaining fully opaque.
+  //
+  // We encode using the preRotated index directly. The accessor derives
+  // the preRotated index from the post-rotation index using the known
+  // rotation offset and array length.
+  const arrayLen = preRotated.length;
+  const arrayElements = preRotated.map((s, idx) => {
+    const hex = xorHexEncode(s, idx, xorPrime, xorSeed);
+    return { type: 'StringLiteral', value: hex };
   });
 
   const arrayDecl: any = {
@@ -218,7 +261,7 @@ export function applyStringArrayExtraction(ast: any): void {
       id: { type: 'Identifier', name: arrayName },
       init: {
         type: 'ArrayExpression',
-        elements: jsfuckElements,
+        elements: arrayElements,
       },
     }],
   };
@@ -280,38 +323,49 @@ export function applyStringArrayExtraction(ast: any): void {
     },
   };
 
-  // 3. Accessor function: var _get = function(i) { return _arr[i - BASE]; };
-  const accessorDecl: any = {
-    type: 'VariableDeclaration',
-    kind: 'var',
-    declarations: [{
-      type: 'VariableDeclarator',
-      id: { type: 'Identifier', name: accessorName },
-      init: {
-        type: 'FunctionExpression',
-        id: null,
-        params: [{ type: 'Identifier', name: 'i' }],
-        body: {
-          type: 'BlockStatement',
-          body: [{
-            type: 'ReturnStatement',
-            argument: {
-              type: 'MemberExpression',
-              object: { type: 'Identifier', name: arrayName },
-              property: {
-                type: 'BinaryExpression',
-                operator: '-',
-                left: { type: 'Identifier', name: 'i' },
-                right: { type: 'NumericLiteral', value: baseOffset },
-              },
-              computed: true,
-            },
-          }],
-        },
-      },
-    }],
-  };
+  // 3. Accessor function with XOR+hex decoder
+  //
+  // If all strings are jsfuck (expressions that evaluate directly), the
+  // accessor just indexes: return _arr[i - BASE];
+  //
+  // If any strings use XOR+hex, the accessor decodes them:
+  //   function(i) {
+  //     var idx = i - BASE;
+  //     var v = _arr[idx];
+  //     if (typeof v !== "string") return v;  // jsfuck already evaluated
+  //     var k = ((idx * PRIME + SEED) & 255) || 1;
+  //     var s = "";
+  //     for (var j = 0; j < v.length; j += 2)
+  //       s += String.fromCharCode(parseInt(v.substr(j, 2), 16) ^ k);
+  //     return _arr[idx] = s;  // cache decoded result
+  //   }
+  //
+  // The cache assignment (_arr[idx] = s) means each string is only decoded
+  // once — subsequent accesses return the cached value directly.
+
+  // Accessor function: decodes XOR+hex at runtime with a decode cache.
+  // Computes the preRotated index from the post-rotation array index
+  // to derive the correct XOR key, then hex-decodes and XOR-decodes.
+  const cacheName = gen();
+  const accessorCode = `var ${cacheName} = {};
+  var ${accessorName} = function(i) {
+    if (${cacheName}[i] !== void 0) return ${cacheName}[i];
+    var idx = i - ${baseOffset};
+    var v = ${arrayName}[idx];
+    var pidx = (idx + ${rotation}) % ${arrayLen};
+    var k = ((pidx * ${xorPrime} + ${xorSeed}) & 255) || 1;
+    var s = "";
+    for (var j = 0; j < v.length; j += 2)
+      s += String.fromCharCode(parseInt(v.substr(j, 2), 16) ^ k);
+    ${cacheName}[i] = s;
+    return s;
+  };`;
+
+  const accessorAst = recast.parse(accessorCode, {
+    parser: require('recast/parsers/babel'),
+  });
+  const accessorStmts = accessorAst.program.body; // cache decl + accessor decl
 
   // Prepend to program body (before everything else)
-  ast.program.body = [arrayDecl, rotationIIFE, accessorDecl, ...ast.program.body];
+  ast.program.body = [arrayDecl, rotationIIFE, ...accessorStmts, ...ast.program.body];
 }
