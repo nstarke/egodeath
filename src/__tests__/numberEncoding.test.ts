@@ -155,7 +155,7 @@ describe('full pipeline with number encoding', () => {
       }
       module.exports = fibonacci;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs'), os = require('os'), path = require('path');
     const tmp = path.join(os.tmpdir(), 'numenc_full_' + Date.now() + '.js');
     fs.writeFileSync(tmp, out);
@@ -168,7 +168,7 @@ describe('full pipeline with number encoding', () => {
 
   it('no plain numeric literals in obfuscated output (except 0 and 1)', () => {
     const code = 'var x = 42; var y = 100; var z = 255;';
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // The specific numbers 42, 100, 255 should not appear as plain literals
     // (they'll be encoded as expressions)
     // Note: they might appear as parts of encoding expressions (e.g., 42 ^ key)

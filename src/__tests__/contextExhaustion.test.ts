@@ -148,7 +148,7 @@ describe('full pipeline with context exhaustion', () => {
     // Run multiple times — at least 3 out of 5 should succeed
     let passes = 0;
     for (let i = 0; i < 5; i++) {
-      const out = obfuscate(code);
+      const out = obfuscate(code, { targetTokens: 10000 });
       const fs = require('fs'), os = require('os'), path = require('path');
       const tmp = path.join(os.tmpdir(), 'ctx_full_' + Date.now() + '_' + i + '.js');
       fs.writeFileSync(tmp, out);
@@ -169,7 +169,7 @@ describe('full pipeline with context exhaustion', () => {
         return c;
       }
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // With XOR+hex encoding (not jsfuck), output is still significantly larger
     expect(out.length).toBeGreaterThan(code.length * 5);
   });

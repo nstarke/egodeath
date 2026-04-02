@@ -164,7 +164,7 @@ describe('full pipeline with string array', () => {
     `;
     let passes = 0;
     for (let i = 0; i < 5; i++) {
-      const out = obfuscate(code);
+      const out = obfuscate(code, { targetTokens: 10000 });
       const fs = require('fs'), os = require('os'), path = require('path');
       const tmp = path.join(os.tmpdir(), 'strarray_test_' + Date.now() + '_' + i + '.js');
       fs.writeFileSync(tmp, out);
@@ -181,7 +181,7 @@ describe('full pipeline with string array', () => {
       var msg = "secret message";
       var key = "password123";
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     expect(out).not.toContain('"secret message"');
     expect(out).not.toContain('"password123"');
     expect(out).not.toContain("'secret message'");

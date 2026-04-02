@@ -219,7 +219,7 @@ describe('full pipeline with proxy functions', () => {
       }
       module.exports = factorial;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs'), os = require('os'), path = require('path');
     const tmp = path.join(os.tmpdir(), 'proxy_full_' + Date.now() + '.js');
     fs.writeFileSync(tmp, out);
@@ -238,7 +238,7 @@ describe('full pipeline with proxy functions', () => {
       }
       module.exports = process;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs'), os = require('os'), path = require('path');
     const tmp = path.join(os.tmpdir(), 'proxy_method_' + Date.now() + '.js');
     fs.writeFileSync(tmp, out);
@@ -253,7 +253,7 @@ describe('full pipeline with proxy functions', () => {
       var b = Math.floor(1.5);
       var c = [1].concat([2]);
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // The original function names should not appear as direct callees
     // All calls should go through the obfuscated proxy names
     expect(out).not.toMatch(/\bfoo\s*\(/);

@@ -176,7 +176,7 @@ describe('full pipeline with comma expressions', () => {
       }
       module.exports = transform;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs'), os = require('os'), path = require('path');
     const tmp = path.join(os.tmpdir(), 'comma_full_' + Date.now() + '.js');
     fs.writeFileSync(tmp, out);
@@ -193,7 +193,7 @@ describe('full pipeline with comma expressions', () => {
         return c;
       }
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // The comma operator should appear in the output (merged switch case bodies)
     // This is hard to test directly since everything is obfuscated,
     // but the output should contain SequenceExpressions rendered as commas

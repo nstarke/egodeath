@@ -135,7 +135,7 @@ describe('global encoding functional correctness', () => {
 describe('full pipeline with global encoding', () => {
   it('no readable global names in obfuscated output', () => {
     const code = 'var x = Math.floor(1.5); var y = JSON.stringify({a:1});';
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // Global names should not appear as readable identifiers
     expect(out).not.toMatch(/\bMath\b/);
     expect(out).not.toMatch(/\bJSON\b/);
@@ -151,7 +151,7 @@ describe('full pipeline with global encoding', () => {
       }
       module.exports = test;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs'), os = require('os'), path = require('path');
     const tmp = path.join(os.tmpdir(), 'glob_enc_test_' + Date.now() + '.js');
     fs.writeFileSync(tmp, out);
@@ -164,7 +164,7 @@ describe('full pipeline with global encoding', () => {
 
   it('strings used in global encoding go into the string array', () => {
     const code = 'var x = Math.PI;';
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     // The output should NOT contain any "Math..." string literal directly
     // because it should be in the jsfuck-encoded string array
     expect(out).not.toMatch(/"Math/);

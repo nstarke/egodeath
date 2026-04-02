@@ -172,7 +172,7 @@ describe('full pipeline correctness with dead code', () => {
       }
       module.exports = calculate;
     `;
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     const fs = require('fs');
     const os = require('os');
     const path = require('path');

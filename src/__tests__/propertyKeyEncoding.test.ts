@@ -137,7 +137,7 @@ describe('property encoding functional correctness', () => {
 describe('full pipeline with property encoding', () => {
   it('no readable property names in final output', () => {
     const code = 'var obj = {secret: 42, password: "abc"};';
-    const out = obfuscate(code);
+    const out = obfuscate(code, { targetTokens: 10000 });
     expect(out).not.toContain('"secret"');
     expect(out).not.toContain('"password"');
     expect(out).not.toMatch(/\.secret/);

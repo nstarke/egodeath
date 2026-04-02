@@ -15,6 +15,7 @@ import { applyProxyFunctions } from './transforms/proxyFunctions';
 import { applyNumberEncoding } from './transforms/numberEncoding';
 import { applyCommaExpressions } from './transforms/commaExpressions';
 import { applyContextExhaustion } from './transforms/contextExhaustion';
+import { applyAntiDebug } from './transforms/antiDebug';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 const { minify_sync } = require('terser');
@@ -103,6 +104,12 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   const ast = recast.parse(code, {
     parser: require('recast/parsers/babel'),
   });
+
+  // Anti-debugging: inject eval("debugger") traps and setInterval loops.
+  // Runs before all other transforms so debugger strings get encoded.
+  if (budget.maxBloatRatio > 3) {
+    applyAntiDebug(ast);
+  }
 
   // Pre-transforms are gated on budget. At very low budgets, structural
   // transforms are skipped entirely — only identifier renaming + string

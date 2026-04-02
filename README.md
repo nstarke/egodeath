@@ -1,5 +1,6 @@
 # egodeath
 
+![images/screenshot.png](images/screenshot.png)
 A JavaScript obfuscator designed to make code extremely difficult to read and analyze for both humans and LLMs. Written in TypeScript.
 
 ## Installation
