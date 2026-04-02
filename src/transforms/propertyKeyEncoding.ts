@@ -75,8 +75,10 @@ function id(name: string): any {
 /**
  * Build: var <varName> = "<propName><suffix>".replace(new RegExp("<suffix>$"), "");
  *
- * Both StringLiterals ("<propName><suffix>" and "<suffix>$") will be
- * picked up by string array extraction and jsfuck-encoded.
+ * Both StringLiterals are picked up by string array extraction and
+ * XOR+hex encoded. At runtime, the .replace() strips the suffix,
+ * leaving the original property name. Different scopes get different
+ * suffixes but all resolve to the same property name at runtime.
  */
 function buildPropVarDecl(varName: string, propName: string): any {
   const suffix = randomSuffix();
@@ -165,10 +167,21 @@ function processBody(body: any[]): void {
 
   if (replacements.length === 0) return;
 
-  // Generate var declarations for each replacement
-  const varDecls: any[] = [];
+  // Deduplicate: same property name in the same scope gets the same
+  // variable. This ensures obj.foo = 1 and obj.foo are consistent.
+  const propToVar = new Map<string, string>();
   for (const r of replacements) {
-    varDecls.push(buildPropVarDecl(r.varName, r.propName));
+    if (!propToVar.has(r.propName)) {
+      propToVar.set(r.propName, r.varName);
+    } else {
+      r.varName = propToVar.get(r.propName)!;
+    }
+  }
+
+  // Generate one var declaration per unique property name
+  const varDecls: any[] = [];
+  for (const [propName, varName] of propToVar) {
+    varDecls.push(buildPropVarDecl(varName, propName));
   }
 
   // Apply replacements — morph nodes in place
@@ -245,6 +258,17 @@ function collectReplacements(node: any, out: Replacement[]): void {
       out.push({ node, propName, varName, kind: 'method-def' });
     }
   }
+
+  // Don't recurse into nested function bodies — those get their own
+  // processBody call from the estraverse, creating their own scope registry.
+  // This ensures each scope has its own set of property key variables.
+  const isFnBody =
+    node.type === 'FunctionDeclaration' ||
+    node.type === 'FunctionExpression' ||
+    node.type === 'ArrowFunctionExpression' ||
+    node.type === 'ObjectMethod' ||
+    node.type === 'ClassMethod';
+  if (isFnBody) return;
 
   // Recurse into child nodes
   for (const key of Object.keys(node)) {

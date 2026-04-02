@@ -17,6 +17,8 @@ import { applyCommaExpressions } from './transforms/commaExpressions';
 import { applyContextExhaustion } from './transforms/contextExhaustion';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
+const { minify_sync } = require('terser');
+
 /**
  * Extended visitor keys for modern AST node types that estraverse
  * doesn't know about natively. Without these, estraverse skips
@@ -165,5 +167,28 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   const consoleKeywords = buildConsoleKeywords();
   ast.program.body = consoleKeywords.concat(ast.program.body);
 
-  return shebang + recast.print(ast).code;
+  let output = shebang + recast.print(ast).code;
+
+  // Final pass: minify to strip whitespace and formatting
+  // Uses terser with no mangling (no variable renaming) and minimal
+  // compression (no dead code elimination) to preserve all obfuscation
+  // while removing readable formatting.
+  try {
+    const result = minify_sync(output, {
+      mangle: false,         // never rename variables
+      compress: false,       // no AST-level compression (would undo obfuscation)
+      format: {
+        beautify: false,     // collapse whitespace
+        comments: false,     // strip any remaining comments
+        semicolons: true,    // use semicolons (not ASI)
+      },
+    });
+    if (result && result.code) {
+      output = result.code;
+    }
+  } catch {
+    // If minification fails, return the unminified output
+  }
+
+  return output;
 }

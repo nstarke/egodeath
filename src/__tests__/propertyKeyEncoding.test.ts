@@ -28,12 +28,21 @@ describe('applyPropertyKeyEncoding', () => {
     expect(out).toContain('.replace(');
   });
 
-  it('generates unique suffix for each instance', () => {
+  it('reuses same variable for same property name in same scope', () => {
     const out = transform('obj.foo; obj.foo;');
+    // Same property name gets the same variable (deduplicated)
     const matches = out.match(/"foo[a-zA-Z0-9]+"/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
-    expect(matches![0]).not.toBe(matches![1]);
+    // Only one declaration for "foo" (deduped)
+    expect(matches!.length).toBe(1);
+  });
+
+  it('generates unique suffix for different properties', () => {
+    const out = transform('obj.foo; obj.bar;');
+    const fooMatch = out.match(/"foo[a-zA-Z0-9]+"/g);
+    const barMatch = out.match(/"bar[a-zA-Z0-9]+"/g);
+    expect(fooMatch).not.toBeNull();
+    expect(barMatch).not.toBeNull();
   });
 
   it('handles multiple different properties', () => {
