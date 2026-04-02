@@ -349,6 +349,7 @@ const VISITOR_KEYS: { [key: string]: string[] } = {
  */
 export function applyOpaquePredicates(ast: any, budget?: any): void {
   const prob = budget ? budget.opaquePredicateProb : 0.30;
+  const deadCodeSize = budget ? Math.min(4, Math.max(1, Math.floor(budget.deadCodeMultiplier / 3))) : 1;
 
   estraverse.traverse(ast.program, {
     keys: VISITOR_KEYS,
@@ -360,14 +361,14 @@ export function applyOpaquePredicates(ast: any, budget?: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        injectPredicates(node.body, prob);
+        injectPredicates(node.body, prob, deadCodeSize);
       }
     },
     fallback: 'iteration',
   } as any);
 }
 
-function injectPredicates(body: any, prob: number): void {
+function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): void {
   const stmts: any[] = body.body;
   if (stmts.length < 2) return;
 
@@ -403,7 +404,7 @@ function injectPredicates(body: any, prob: number): void {
         consequent: { type: 'BlockStatement', body: [stmt] },
         alternate: {
           type: 'BlockStatement',
-          body: generateDeadCodeBlock(scopeVars),
+          body: generateDeadCodeBlock(scopeVars, deadCodeSize),
         },
       });
       continue;
@@ -416,12 +417,33 @@ function injectPredicates(body: any, prob: number): void {
       newBody.push({
         type: 'IfStatement',
         test: pred.expr,
-        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars) },
+        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize) },
         alternate: null,
       });
     }
 
     newBody.push(stmt);
+  }
+
+  // If the budget allows heavy dead code and CFF didn't run on this body
+  // (no WhileStatement with switch inside), inject extra standalone dead
+  // code blocks to fill the token budget.
+  const hasCFF = newBody.some((s: any) =>
+    s.type === 'WhileStatement' && s.body?.body?.[0]?.type === 'SwitchStatement');
+  if (!hasCFF && deadCodeSize >= 2) {
+    const extraBlocks = Math.min(30, deadCodeSize * 3);
+    for (let j = 0; j < extraBlocks; j++) {
+      const pred = generatePredicate(false);
+      probeInits.push(pred.probeInit);
+      // Insert dead code at a random position in the body
+      const pos = randInt(0, newBody.length);
+      newBody.splice(pos, 0, {
+        type: 'IfStatement',
+        test: pred.expr,
+        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars, deadCodeSize) },
+        alternate: null,
+      });
+    }
   }
 
   // Insert probe inits at the top of the function body

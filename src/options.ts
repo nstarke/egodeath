@@ -17,10 +17,6 @@ export const DEFAULT_OPTIONS: ObfuscateOptions = {
 
 /**
  * Compute bloat parameters based on input size and target token budget.
- *
- * Returns probabilities (0-1) and multipliers that transforms use to
- * throttle their output. Small inputs get aggressive bloating;
- * large inputs get minimal bloating.
  */
 export interface BloatBudget {
   /** Target output characters (targetTokens * ~4 chars/token) */
@@ -41,49 +37,46 @@ export interface BloatBudget {
   /** Multiplier (0-1) for dead code case count in CFF */
   deadCodeMultiplier: number;
 
-  /** Whether to jsfuck-encode strings in the string array */
+  /** Whether to use XOR+hex encoding for strings (always true now) */
   useJsfuck: boolean;
 
-  /** Max number of strings to jsfuck-encode (rest stay as unicode-escaped literals) */
+  /** Legacy — no longer used with XOR+hex encoding */
   jsfuckStringLimit: number;
 }
 
 /**
  * Compute the bloat budget from input size and options.
+ *
+ * With XOR+hex string encoding (~2-4x expansion), the main bloat
+ * comes from structural transforms (CFF, opaque predicates, dead code,
+ * proxy functions, context exhaustion, property/global encoding).
+ * Each layer adds roughly 1.5-3x, so the total achievable expansion
+ * with all transforms at full intensity is ~10-30x.
+ *
+ * The budget system throttles transform probabilities when the input
+ * is large relative to the target output. Small inputs always get
+ * maximum obfuscation.
  */
 export function computeBloatBudget(inputChars: number, options: ObfuscateOptions): BloatBudget {
   const CHARS_PER_TOKEN = 4;
   const targetChars = options.targetTokens * CHARS_PER_TOKEN;
-
-  // Average jsfuck expansion per string: ~3000 chars for a 5-char string
-  // Average strings per 100 chars of input: ~2-3
-  // So jsfuck alone can produce: (inputChars / 100) * 3 * 3000 = inputChars * 90
-  // Other transforms add ~5-20x on top
-
   const maxBloatRatio = Math.max(2, targetChars / Math.max(1, inputChars));
 
-  // If the input is already large relative to target, heavily throttle
-  // If the input is tiny, allow maximum bloat
-  const headroom = Math.min(1, maxBloatRatio / 2000);
+  // With XOR+hex string encoding, the main volume comes from dead code
+  // injection. headroom controls how aggressively we inject dead code.
+  // headroom=1.0 at ratio 30 (modest budget), scales up beyond for
+  // larger budgets to fill the token target.
+  const headroom = Math.min(1, maxBloatRatio / 30);
 
-  // Context exhaustion: 35% at full budget, 0% when headroom is gone
+  // Transform probabilities scale with headroom
   const contextExhaustionProb = Math.min(0.35, headroom * 0.35);
-
-  // Opaque predicates: 30%/20% at full budget
   const opaquePredicateProb = Math.min(0.30, headroom * 0.30);
 
-  // Dead code: 30% of real cases at full budget, fewer when tight
-  const deadCodeMultiplier = Math.min(1, headroom);
-
-  // Jsfuck is the biggest bloat driver (~90x per string)
-  // For large inputs, limit the number of strings that get jsfuck-encoded
-  const estimatedStrings = Math.max(1, Math.floor(inputChars / 30));
-  const jsfuckBudgetChars = targetChars * 0.7; // allocate 70% of budget to jsfuck
-  const charsPerJsfuckString = 3000; // rough average
-  const jsfuckStringLimit = Math.max(
-    10,
-    Math.floor(jsfuckBudgetChars / charsPerJsfuckString),
-  );
+  // Dead code multiplier: the primary volume lever.
+  // At maxBloatRatio=30 (tight), deadCodeMultiplier=1 (30% extra cases).
+  // At maxBloatRatio=1000 (lots of headroom), deadCodeMultiplier=~33
+  // (each real case gets ~10 dead cases, plus larger dead code blocks).
+  const deadCodeMultiplier = Math.min(150, maxBloatRatio / 10);
 
   return {
     targetChars,
@@ -92,7 +85,7 @@ export function computeBloatBudget(inputChars: number, options: ObfuscateOptions
     contextExhaustionProb,
     opaquePredicateProb,
     deadCodeMultiplier,
-    useJsfuck: maxBloatRatio > 5, // disable jsfuck entirely for very tight budgets
-    jsfuckStringLimit,
+    useJsfuck: true,
+    jsfuckStringLimit: Infinity,
   };
 }

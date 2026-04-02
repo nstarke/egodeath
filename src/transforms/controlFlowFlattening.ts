@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
-import { generateDeadCaseBody, collectScopeVars } from './deadCodeInjection';
+import { generateDeadCode, collectScopeVars } from './deadCodeInjection';
 
 const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
   ArrowFunctionExpression: ['params', 'body'],
@@ -41,6 +41,10 @@ const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
   NullLiteral: [],
   RegExpLiteral: [],
 };
+
+function pick<T>(arr: T[]): T {
+  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
+}
 
 // Minimum number of top-level statements to bother flattening
 const MIN_STATEMENTS = 3;
@@ -418,16 +422,32 @@ export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[]
   // Build case blocks from the transformed statements
   const { cases, entryState } = buildCases(transformed, stateVar);
 
-  // Inject dead switch cases that are never reached but look real
+  // Inject dead switch cases that are never reached but look real.
+  // The deadCodeMul controls how many dead cases to inject — at high
+  // values (budget has lots of headroom), we inject many large dead cases.
   const realStateIds = cases.map((c) => c.stateId);
   const scopeVars = collectScopeVars(body);
   const deadCaseCount = Math.max(2, Math.floor(cases.length * 0.3 * deadCodeMul));
+  // How many templates to combine per dead case (more = larger blocks)
+  const templatesPerCase = Math.min(5, Math.max(1, Math.floor(deadCodeMul / 5)));
   const deadIds = generateStateIds(deadCaseCount);
   for (const deadId of deadIds) {
-    cases.push({
-      stateId: deadId,
-      body: generateDeadCaseBody(stateVar, realStateIds, scopeVars),
-    });
+    // Generate a larger dead code block by combining multiple templates
+    const stmts = generateDeadCode(scopeVars, templatesPerCase);
+    const targetState = pick(realStateIds);
+    stmts.push(
+      {
+        type: 'ExpressionStatement',
+        expression: {
+          type: 'AssignmentExpression',
+          operator: '=',
+          left: identifier(stateVar),
+          right: numericLiteral(targetState),
+        },
+      },
+      breakStatement(),
+    );
+    cases.push({ stateId: deadId, body: stmts });
   }
 
   // State variable declaration
