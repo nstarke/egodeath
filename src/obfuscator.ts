@@ -7,6 +7,7 @@ import { firstPassHandlers } from './passes/firstPass';
 import { secondPassHandlers } from './passes/secondPass';
 import { thirdPassHandlers } from './passes/thirdPass';
 import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
+import { applyOpaquePredicates } from './transforms/opaquePredicates';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -92,6 +93,10 @@ export function obfuscate(code: string): string {
   // Pre-transform: control flow flattening
   // Runs before identifier passes so that state variables get obfuscated
   applyControlFlowFlattening(ast);
+
+  // Pre-transform: opaque predicates
+  // Injects fake branches and dead code behind mathematically opaque conditions
+  applyOpaquePredicates(ast);
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
