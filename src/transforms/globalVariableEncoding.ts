@@ -29,60 +29,7 @@ function escapeRegex(s: string): string {
 
 // ---- Globals to encode ----
 
-/**
- * Global objects/constructors that can be recovered via eval("Name").
- * We only target globals that are safe to eval — actual built-in
- * objects reachable from the global scope.
- */
-const ENCODABLE_GLOBALS = new Set([
-  'Array',
-  'ArrayBuffer',
-  'Boolean',
-  'DataView',
-  'Date',
-  'Error',
-  'EvalError',
-  'Float32Array',
-  'Float64Array',
-  'Function',
-  'Int8Array',
-  'Int16Array',
-  'Int32Array',
-  'Infinity',
-  'JSON',
-  'Map',
-  'Math',
-  'Number',
-  'Object',
-  'Promise',
-  'Proxy',
-  'RangeError',
-  'ReferenceError',
-  'Reflect',
-  'RegExp',
-  'Set',
-  'String',
-  'Symbol',
-  'SyntaxError',
-  'TypeError',
-  'URIError',
-  'Uint8Array',
-  'Uint8ClampedArray',
-  'Uint16Array',
-  'Uint32Array',
-  'WeakMap',
-  'WeakSet',
-  'decodeURI',
-  'decodeURIComponent',
-  'encodeURI',
-  'encodeURIComponent',
-  'escape',
-  'isFinite',
-  'isNaN',
-  'parseFloat',
-  'parseInt',
-  'unescape',
-]);
+import { getEncodableGlobals } from '../keywords';
 
 // ---- Visitor keys ----
 
@@ -238,7 +185,7 @@ export function applyGlobalVariableEncoding(ast: any): void {
     keys: VISITOR_KEYS,
     enter(node: any, parent: any) {
       if (node.type !== 'Identifier') return;
-      if (!ENCODABLE_GLOBALS.has(node.name)) return;
+      if (!getEncodableGlobals().has(node.name)) return;
       if (!isGlobalReference(node, parent)) return;
 
       replacements.push({
