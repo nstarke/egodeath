@@ -223,19 +223,8 @@ export const secondPassHandlers: PassHandlerMap = {
         node.extra.raw = '"' + node.value + '"';
       }
       return node;
-    } else if (
-      typeof node.value === 'string' &&
-      node.value &&
-      parent.type !== 'Property' &&
-      node.value.length < 64
-    ) {
-      const e = jsfuck.encode(node.value);
-      node.type = 'UnaryExpression';
-      node.operator = '';
-      node.argument = recast.parse(e, {
-        parser: require('recast/parsers/babel'),
-      }).program.body.pop();
     }
+    // String hiding is handled by string array extraction (post-transform)
     return node;
   },
 
@@ -377,20 +366,8 @@ export const secondPassHandlers: PassHandlerMap = {
         node.extra.raw = '"' + node.value + '"';
       }
       return node;
-    } else if (
-      typeof node.value === 'string' &&
-      node.value &&
-      parent.type !== 'Property' &&
-      parent.type !== 'ObjectProperty' &&
-      node.value.length < 64
-    ) {
-      const e = jsfuck.encode(node.value);
-      node.type = 'UnaryExpression';
-      node.operator = '';
-      node.argument = recast.parse(e, {
-        parser: require('recast/parsers/babel'),
-      }).program.body.pop();
     }
+    // String hiding is handled by string array extraction (post-transform)
     return node;
   },
 

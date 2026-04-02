@@ -8,6 +8,7 @@ import { secondPassHandlers } from './passes/secondPass';
 import { thirdPassHandlers } from './passes/thirdPass';
 import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
 import { applyOpaquePredicates } from './transforms/opaquePredicates';
+import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -114,6 +115,11 @@ export function obfuscate(code: string): string {
     },
     fallback: 'iteration',
   } as any);
+
+  // Post-transform: string array extraction + rotation
+  // Collects all string literals into a rotated array, replaces with accessor calls
+  // Runs after all passes so it captures the final string values
+  applyStringArrayExtraction(ast);
 
   // Prepend console stubs
   const consoleKeywords = buildConsoleKeywords();
