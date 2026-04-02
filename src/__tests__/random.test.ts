@@ -7,13 +7,12 @@ describe('mkStr', () => {
     expect(result.length).toBeGreaterThan(0);
   });
 
-  it('returns strings of 1-10 code points', () => {
+  it('returns strings of 6-16 code points', () => {
     for (let i = 0; i < 20; i++) {
       const result = mkStr();
-      // .length may exceed 10 due to surrogate pairs, but code point count is 1-10
       const codePointCount = [...result].length;
-      expect(codePointCount).toBeGreaterThanOrEqual(1);
-      expect(codePointCount).toBeLessThanOrEqual(10);
+      expect(codePointCount).toBeGreaterThanOrEqual(6);
+      expect(codePointCount).toBeLessThanOrEqual(16);
     }
   });
 

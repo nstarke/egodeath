@@ -127,27 +127,58 @@ function hoistDeclarations(stmts: any[]): HoistResult {
   for (const stmt of stmts) {
     if (stmt.type === 'VariableDeclaration') {
       for (const decl of stmt.declarations) {
-        // Hoist as var (no init)
-        hoisted.push({
-          type: 'VariableDeclaration',
-          kind: 'var',
-          declarations: [{
-            type: 'VariableDeclarator',
-            id: cloneId(decl.id),
-            init: null,
-          }],
-        });
-        // If there was an initializer, convert to assignment
-        if (decl.init) {
-          transformed.push({
-            type: 'ExpressionStatement',
-            expression: {
-              type: 'AssignmentExpression',
-              operator: '=',
-              left: cloneId(decl.id),
-              right: decl.init,
-            },
+        const isDestructuring =
+          decl.id.type === 'ObjectPattern' || decl.id.type === 'ArrayPattern';
+
+        if (isDestructuring) {
+          // Destructuring: extract each binding name as a simple var declaration
+          // var { a, b } = obj  →  var a; var b;  +  ({a, b} = obj);
+          const names = extractBindingNames(decl.id);
+          for (const name of names) {
+            hoisted.push({
+              type: 'VariableDeclaration',
+              kind: 'var',
+              declarations: [{
+                type: 'VariableDeclarator',
+                id: identifier(name),
+                init: null,
+              }],
+            });
+          }
+          if (decl.init) {
+            // Convert to destructuring assignment expression: ({a, b} = obj)
+            transformed.push({
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'AssignmentExpression',
+                operator: '=',
+                left: decl.id,
+                right: decl.init,
+              },
+            });
+          }
+        } else {
+          // Simple identifier: hoist as var (no init)
+          hoisted.push({
+            type: 'VariableDeclaration',
+            kind: 'var',
+            declarations: [{
+              type: 'VariableDeclarator',
+              id: cloneId(decl.id),
+              init: null,
+            }],
           });
+          if (decl.init) {
+            transformed.push({
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'AssignmentExpression',
+                operator: '=',
+                left: cloneId(decl.id),
+                right: decl.init,
+              },
+            });
+          }
         }
       }
     } else {
@@ -162,8 +193,42 @@ function cloneId(id: any): any {
   if (id.type === 'Identifier') {
     return { type: 'Identifier', name: id.name };
   }
-  // ObjectPattern, ArrayPattern — just return as-is for now
+  // ObjectPattern, ArrayPattern — return as-is (caller handles destructuring)
   return id;
+}
+
+/**
+ * Extract all binding names from a destructuring pattern.
+ * { a, b: c, ...d } → ['a', 'c', 'd']
+ * [a, , b, ...c]    → ['a', 'b', 'c']
+ */
+function extractBindingNames(pattern: any): string[] {
+  const names: string[] = [];
+  if (pattern.type === 'Identifier') {
+    names.push(pattern.name);
+  } else if (pattern.type === 'ObjectPattern') {
+    for (const prop of pattern.properties) {
+      if (prop.type === 'RestElement') {
+        names.push(...extractBindingNames(prop.argument));
+      } else {
+        // prop.value is the local binding (may itself be a pattern)
+        names.push(...extractBindingNames(prop.value || prop.key));
+      }
+    }
+  } else if (pattern.type === 'ArrayPattern') {
+    for (const elem of pattern.elements) {
+      if (elem) {
+        if (elem.type === 'RestElement') {
+          names.push(...extractBindingNames(elem.argument));
+        } else {
+          names.push(...extractBindingNames(elem));
+        }
+      }
+    }
+  } else if (pattern.type === 'AssignmentPattern') {
+    names.push(...extractBindingNames(pattern.left));
+  }
+  return names;
 }
 
 // ----- Core flattening -----

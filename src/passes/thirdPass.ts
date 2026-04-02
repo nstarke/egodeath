@@ -4,6 +4,16 @@ import { gen } from '../random';
 import { Identifier } from '../ast';
 
 /**
+ * Check if a function's last parameter is a rest element (...args).
+ * If so, we must not append dummy params after it.
+ */
+function hasRestParam(node: any): boolean {
+  if (!node.params || node.params.length === 0) return false;
+  const last = node.params[node.params.length - 1];
+  return last.type === 'RestElement';
+}
+
+/**
  * Generate 0-15 random dummy identifier nodes for parameter injection.
  */
 export function addIdentifiers(): IdentifierNode[] {
@@ -32,7 +42,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   CallExpression(node) { return node; },
 
   FunctionExpression(node) {
-    node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
 
@@ -44,7 +54,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   AssignmentExpression(node) { return node; },
 
   FunctionDeclaration(node) {
-    node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
 
@@ -60,7 +70,7 @@ export const thirdPassHandlers: PassHandlerMap = {
 
   // Modern ES6+ node types
   ArrowFunctionExpression(node) {
-    node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
 
@@ -102,7 +112,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   MethodDefinition(node) { return node; },
 
   ObjectMethod(node) {
-    node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
 

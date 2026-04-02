@@ -193,6 +193,14 @@ function processBody(body: any[]): void {
     } else if (r.kind === 'property') {
       // {foo: val} → {[varName]: val}: set computed=true, replace key
       r.node.computed = true;
+      // If shorthand ({foo} = {foo: foo}), expand it explicitly
+      if (r.node.shorthand) {
+        r.node.shorthand = false;
+        // value should already be the identifier, but ensure it
+        if (!r.node.value) {
+          r.node.value = { type: 'Identifier', name: r.propName };
+        }
+      }
       r.node.key = id(r.varName);
     } else if (r.kind === 'method-def') {
       // class { foo() {} } → class { [varName]() {} }
@@ -209,15 +217,20 @@ function processBody(body: any[]): void {
  * Recursively collect all property access and object key nodes
  * that should be encoded.
  */
-function collectReplacements(node: any, out: Replacement[]): void {
+function collectReplacements(node: any, out: Replacement[], isInsidePattern: boolean = false): void {
   if (!node || typeof node !== 'object') return;
 
   // Skip array processing for non-AST arrays
   if (Array.isArray(node)) {
     for (const child of node) {
-      collectReplacements(child, out);
+      collectReplacements(child, out, isInsidePattern);
     }
     return;
+  }
+
+  // Track when we're inside a destructuring pattern
+  if (node.type === 'ObjectPattern' || node.type === 'ArrayPattern') {
+    isInsidePattern = true;
   }
 
   // MemberExpression with dot notation: obj.foo
@@ -239,8 +252,11 @@ function collectReplacements(node: any, out: Replacement[]): void {
   }
 
   // Property / ObjectProperty in object literals: { foo: val }
+  // Skip properties inside destructuring patterns (ObjectPattern) —
+  // computed keys in destructuring require explicit value targets
+  // and interact badly with shorthand syntax.
   if ((node.type === 'Property' || node.type === 'ObjectProperty') &&
-      !node.computed && node.key) {
+      !node.computed && node.key && !isInsidePattern) {
     const propName = node.key.name || node.key.value;
     if (propName && typeof propName === 'string' && shouldEncode(propName)) {
       const varName = gen();
@@ -279,7 +295,7 @@ function collectReplacements(node: any, out: Replacement[]): void {
     }
     const child = node[key];
     if (child && typeof child === 'object') {
-      collectReplacements(child, out);
+      collectReplacements(child, out, isInsidePattern);
     }
   }
 }
