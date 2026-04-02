@@ -6,6 +6,7 @@ import { buildConsoleKeywords } from './keywords';
 import { firstPassHandlers } from './passes/firstPass';
 import { secondPassHandlers } from './passes/secondPass';
 import { thirdPassHandlers } from './passes/thirdPass';
+import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -87,6 +88,10 @@ export function obfuscate(code: string): string {
   const ast = recast.parse(code, {
     parser: require('recast/parsers/babel'),
   });
+
+  // Pre-transform: control flow flattening
+  // Runs before identifier passes so that state variables get obfuscated
+  applyControlFlowFlattening(ast);
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
