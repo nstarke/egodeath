@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
+import { generateDeadCode as generateDeadCodeBlock, collectScopeVars } from './deadCodeInjection';
 
 // ---- Randomness helpers ----
 
@@ -336,62 +337,7 @@ const VISITOR_KEYS: { [key: string]: string[] } = {
   RegExpLiteral: [],
 };
 
-/**
- * Generate a plausible-looking dead code block.
- * These should look real enough that an analyzer can't trivially dismiss them.
- */
-function generateDeadCode(): any[] {
-  const v1 = gen();
-  const v2 = gen();
-  const k1 = randInt(1, 100);
-  const k2 = randInt(1, 100);
-
-  const patterns: (() => any[])[] = [
-    // var x = <k>; var y = x + <k2>; return y;
-    () => [
-      { type: 'VariableDeclaration', kind: 'var', declarations: [
-        { type: 'VariableDeclarator', id: id(v1), init: num(k1) },
-      ]},
-      { type: 'VariableDeclaration', kind: 'var', declarations: [
-        { type: 'VariableDeclarator', id: id(v2), init: bin('+', id(v1), num(k2)) },
-      ]},
-      { type: 'ReturnStatement', argument: id(v2) },
-    ],
-    // throw new Error(<string>);
-    () => [
-      { type: 'ThrowStatement', argument: {
-        type: 'NewExpression',
-        callee: id('Error'),
-        arguments: [{ type: 'StringLiteral', value: gen() }],
-      }},
-    ],
-    // var x = []; x.push(<k>); return x;
-    () => [
-      { type: 'VariableDeclaration', kind: 'var', declarations: [
-        { type: 'VariableDeclarator', id: id(v1), init: { type: 'ArrayExpression', elements: [] } },
-      ]},
-      { type: 'ExpressionStatement', expression: call(
-        member(id(v1), id('push')), [num(k1)]
-      )},
-      { type: 'ReturnStatement', argument: id(v1) },
-    ],
-    // var x = <k1> * <k2>; if (x > 0) { return x; }
-    () => [
-      { type: 'VariableDeclaration', kind: 'var', declarations: [
-        { type: 'VariableDeclarator', id: id(v1), init: bin('*', num(k1), num(k2)) },
-      ]},
-      { type: 'IfStatement',
-        test: bin('>', id(v1), num(0)),
-        consequent: { type: 'BlockStatement', body: [
-          { type: 'ReturnStatement', argument: id(v1) },
-        ]},
-        alternate: null,
-      },
-    ],
-  ];
-
-  return pick(patterns)();
-}
+// Dead code generation is now delegated to deadCodeInjection.ts
 
 /**
  * Apply opaque predicates to function bodies in the AST.
@@ -423,6 +369,7 @@ function injectPredicates(body: any): void {
   const stmts: any[] = body.body;
   if (stmts.length < 2) return;
 
+  const scopeVars = collectScopeVars(stmts);
   const newBody: any[] = [];
   const probeInits: any[] = [];
 
@@ -454,7 +401,7 @@ function injectPredicates(body: any): void {
         consequent: { type: 'BlockStatement', body: [stmt] },
         alternate: {
           type: 'BlockStatement',
-          body: generateDeadCode(),
+          body: generateDeadCodeBlock(scopeVars),
         },
       });
       continue;
@@ -467,7 +414,7 @@ function injectPredicates(body: any): void {
       newBody.push({
         type: 'IfStatement',
         test: pred.expr,
-        consequent: { type: 'BlockStatement', body: generateDeadCode() },
+        consequent: { type: 'BlockStatement', body: generateDeadCodeBlock(scopeVars) },
         alternate: null,
       });
     }

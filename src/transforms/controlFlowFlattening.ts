@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
+import { generateDeadCaseBody, collectScopeVars } from './deadCodeInjection';
 
 const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
   ArrowFunctionExpression: ['params', 'body'],
@@ -339,6 +340,18 @@ export function flattenFunctionBody(body: any[]): any[] | null {
 
   // Build case blocks from the transformed statements
   const { cases, entryState } = buildCases(transformed, stateVar);
+
+  // Inject dead switch cases that are never reached but look real
+  const realStateIds = cases.map((c) => c.stateId);
+  const scopeVars = collectScopeVars(body);
+  const deadCaseCount = Math.max(2, Math.floor(cases.length * 0.3));
+  const deadIds = generateStateIds(deadCaseCount);
+  for (const deadId of deadIds) {
+    cases.push({
+      stateId: deadId,
+      body: generateDeadCaseBody(stateVar, realStateIds, scopeVars),
+    });
+  }
 
   // State variable declaration
   const stateVarDecl: any = {
