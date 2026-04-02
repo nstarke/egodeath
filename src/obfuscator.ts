@@ -16,6 +16,7 @@ import { applyNumberEncoding } from './transforms/numberEncoding';
 import { applyCommaExpressions } from './transforms/commaExpressions';
 import { applyContextExhaustion } from './transforms/contextExhaustion';
 import { applyAntiDebug } from './transforms/antiDebug';
+import { applyTripwires } from './transforms/tripwires';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 const { minify_sync } = require('terser');
@@ -109,6 +110,13 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // Runs before all other transforms so debugger strings get encoded.
   if (budget.maxBloatRatio > 3) {
     applyAntiDebug(ast);
+  }
+
+  // Punctured program tripwires (Paper 4: Sahai & Waters)
+  // Hidden checks that trigger corruption on secret inputs.
+  // Runs early so tripwire code gets obfuscated by all subsequent passes.
+  if (budget.maxBloatRatio > 3) {
+    applyTripwires(ast);
   }
 
   // Pre-transforms are gated on budget. At very low budgets, structural
