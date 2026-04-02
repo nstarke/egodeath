@@ -6,8 +6,7 @@ import { getGlobals } from '../globals';
 const jsfuck = require('jsfuck').JSFuck;
 
 /**
- * Check if the parent node is a require() call — we must not encode
- * require() arguments or module resolution breaks at runtime.
+ * Check if the parent node is a require() call.
  */
 function isRequireCall(parent: any): boolean {
   if (parent.type === 'CallExpression') {
@@ -26,6 +25,52 @@ function isImportSource(parent: any): boolean {
   return parent.type === 'ImportDeclaration' ||
     parent.type === 'ExportNamedDeclaration' ||
     parent.type === 'ExportAllDeclaration';
+}
+
+/**
+ * Build a String.fromCharCode(...charCodes) AST node that evaluates
+ * to the original string at runtime but hides the literal value.
+ * Used for require() and dynamic import() arguments.
+ *
+ *   "fs" → String.fromCharCode(102, 115)
+ */
+function buildFromCharCode(value: string): ASTNode {
+  return {
+    type: 'CallExpression',
+    callee: {
+      type: 'MemberExpression',
+      object: { type: 'Identifier', name: 'String' },
+      property: { type: 'Identifier', name: 'fromCharCode' },
+      computed: false,
+    },
+    arguments: Array.from(value).map((ch) => ({
+      type: 'NumericLiteral',
+      value: ch.charCodeAt(0),
+    })),
+  };
+}
+
+/**
+ * Encode a string as a unicode-escaped string literal.
+ * Used for static import/export source strings where expressions
+ * are not allowed — only literal strings are valid.
+ *
+ *   "fs" → "\u0066\u0073"
+ *
+ * JavaScript resolves unicode escapes in string literals identically
+ * to the original characters, so module resolution still works.
+ */
+function unicodeEscape(value: string): string {
+  return Array.from(value)
+    .map((ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('');
+}
+
+/**
+ * Check if the parent is a dynamic import() call.
+ */
+function isDynamicImport(parent: any): boolean {
+  return parent.type === 'CallExpression' && parent.callee?.type === 'Import';
 }
 
 /**
@@ -158,9 +203,30 @@ export const secondPassHandlers: PassHandlerMap = {
     } else if (
       typeof node.value === 'string' &&
       node.value &&
+      (isRequireCall(parent) || isDynamicImport(parent))
+    ) {
+      // require() and dynamic import() — replace with String.fromCharCode()
+      const charCodeNode = buildFromCharCode(node.value);
+      Object.keys(node).forEach((k) => delete node[k]);
+      Object.assign(node, charCodeNode);
+      return node;
+    } else if (
+      typeof node.value === 'string' &&
+      node.value &&
+      isImportSource(parent)
+    ) {
+      // Static import/export — must stay a string literal, so use unicode escapes
+      node.value = unicodeEscape(node.value);
+      if (node.raw) node.raw = '"' + unicodeEscape(node.value) + '"';
+      if (node.extra) {
+        node.extra.rawValue = node.value;
+        node.extra.raw = '"' + node.value + '"';
+      }
+      return node;
+    } else if (
+      typeof node.value === 'string' &&
+      node.value &&
       parent.type !== 'Property' &&
-      !isRequireCall(parent) &&
-      !isImportSource(parent) &&
       node.value.length < 64
     ) {
       const e = jsfuck.encode(node.value);
@@ -292,10 +358,30 @@ export const secondPassHandlers: PassHandlerMap = {
     if (
       typeof node.value === 'string' &&
       node.value &&
+      (isRequireCall(parent) || isDynamicImport(parent))
+    ) {
+      // require() and dynamic import() — replace with String.fromCharCode()
+      const charCodeNode = buildFromCharCode(node.value);
+      Object.keys(node).forEach((k) => delete node[k]);
+      Object.assign(node, charCodeNode);
+      return node;
+    } else if (
+      typeof node.value === 'string' &&
+      node.value &&
+      isImportSource(parent)
+    ) {
+      // Static import/export — use unicode escapes in the string literal
+      node.value = unicodeEscape(node.value);
+      if (node.extra) {
+        node.extra.rawValue = node.value;
+        node.extra.raw = '"' + node.value + '"';
+      }
+      return node;
+    } else if (
+      typeof node.value === 'string' &&
+      node.value &&
       parent.type !== 'Property' &&
       parent.type !== 'ObjectProperty' &&
-      !isRequireCall(parent) &&
-      !isImportSource(parent) &&
       node.value.length < 64
     ) {
       const e = jsfuck.encode(node.value);
