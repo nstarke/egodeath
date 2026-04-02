@@ -12,6 +12,7 @@ import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
 import { applyGlobalVariableEncoding } from './transforms/globalVariableEncoding';
 import { applyPropertyKeyEncoding } from './transforms/propertyKeyEncoding';
 import { applyProxyFunctions } from './transforms/proxyFunctions';
+import { applyNumberEncoding } from './transforms/numberEncoding';
 
 /**
  * Extended visitor keys for modern AST node types that estraverse
@@ -133,6 +134,10 @@ export function obfuscate(code: string): string {
   // Converts obj.foo to obj[var] where var holds "foo<suffix>".replace(...)
   // Runs after global encoding so global method names also get encoded
   applyPropertyKeyEncoding(ast);
+
+  // Post-transform: number encoding
+  // Replaces numeric literals with equivalent bitwise/arithmetic expressions
+  applyNumberEncoding(ast);
 
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
