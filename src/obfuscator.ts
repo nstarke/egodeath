@@ -212,6 +212,9 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
 
   let output = shebang + recast.print(ast).code;
 
+  // Normalize CRLF → LF so terser and regex fallback work on all platforms
+  output = output.replace(/\r\n?/g, '\n');
+
   // Final pass: minify to strip whitespace and formatting
   // Uses terser with no mangling (no variable renaming) and minimal
   // compression (no dead code elimination) to preserve all obfuscation
