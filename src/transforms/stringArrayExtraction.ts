@@ -48,12 +48,50 @@ function computeChainKeys(strings: string[], seed: number, prime: number): numbe
 }
 
 /**
- * XOR-encode a string with a given key and return as hex.
+ * Sparse XOR encoding with position-dependent error patterns
+ * (Paper 9: Ragavan, Vafa, Vaikuntanathan — LPN variants)
+ *
+ * Instead of XOR'ing every character with the same key, each character
+ * gets a DIFFERENT XOR value derived from:
+ *   1. The chain key (from Paper 2 chaining)
+ *   2. The character's position within the string
+ *   3. A "sparse error" at select positions — an extra XOR that makes
+ *      the encoding non-uniform across the string
+ *
+ * The sparse error pattern is determined by a secondary seed. Only
+ * positions where (pos * errorPrime) % errorMod < errorThreshold get
+ * the extra error XOR. This creates a sparse, position-dependent
+ * error vector analogous to LPN's noise.
+ *
+ * To decode, the runtime must know: key, errorSeed, errorPrime,
+ * errorMod, errorThreshold — all embedded in the accessor function.
+ *
+ * @param str          The string to encode
+ * @param key          Base XOR key (from chain)
+ * @param errorSeed    Seed for the sparse error pattern
+ * @param errorPrime   Prime for error position selection
+ * @param errorMod     Modulus for error position selection
+ * @param errorThreshold  Positions where (pos*P)%M < threshold get extra error
  */
-function xorHexEncodeWithKey(str: string, key: number): string {
+function sparseXorEncode(
+  str: string,
+  key: number,
+  errorSeed: number,
+  errorPrime: number,
+  errorMod: number,
+  errorThreshold: number,
+): string {
   let hex = '';
   for (let i = 0; i < str.length; i++) {
-    const encoded = str.charCodeAt(i) ^ key;
+    // Position-dependent key: base key rotated by position
+    let posKey = ((key + i * 7 + (i * i * 3)) & 0xFF) || 1;
+
+    // Sparse error: additional XOR at select positions
+    if ((i * errorPrime) % errorMod < errorThreshold) {
+      posKey = (posKey ^ ((errorSeed + i * 13) & 0xFF)) & 0xFF;
+    }
+
+    const encoded = str.charCodeAt(i) ^ posKey;
     hex += encoded.toString(16).padStart(2, '0');
   }
   return hex;
@@ -187,6 +225,14 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const xorPrime = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31][randInt(0, 9)];
   const xorSeed = randInt(1, 255);
 
+  // Sparse error pattern constants (Paper 9: LPN-inspired)
+  const errorSeed = randInt(1, 255);
+  const errorPrime = [3, 5, 7, 11, 13][randInt(0, 4)];
+  const errorMod = [7, 11, 13, 17, 19][randInt(0, 4)];
+  // Threshold controls sparsity: lower = fewer positions get extra error
+  // ~30-50% of positions get the sparse error
+  const errorThreshold = Math.max(2, Math.floor(errorMod * 0.4));
+
   // ---- Pass 1: Collect strings ----
 
   const stringMap = new Map<string, number>(); // value → finalIndex
@@ -273,7 +319,7 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const arrayLen = orderedStrings.length;
   const chainKeys = computeChainKeys(orderedStrings, xorSeed, xorPrime);
   const arrayElements = orderedStrings.map((s, idx) => {
-    const hex = xorHexEncodeWithKey(s, chainKeys[idx]);
+    const hex = sparseXorEncode(s, chainKeys[idx], errorSeed, errorPrime, errorMod, errorThreshold);
     return { type: 'StringLiteral', value: hex };
   });
 
@@ -302,6 +348,12 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const cacheName = gen();
   const chainDecodedFlag = gen();
 
+  // 2. Chained accessor with sparse XOR decoding (Papers 2 + 9)
+  //
+  // Decodes the entire chain on first call. Each character uses a
+  // position-dependent key plus a sparse error pattern — the same
+  // encoding applied at build time, reversed at runtime.
+
   const accessorCode = `
   var ${cacheName} = {};
   var ${chainDecodedFlag} = false;
@@ -313,10 +365,16 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
         var v = ${arrayName}[ci];
         var s = "";
         var h = 0;
+        var cpos = 0;
         for (var j = 0; j < v.length; j += 2) {
-          var ch = parseInt(v.substr(j, 2), 16) ^ k;
+          var posKey = ((k + cpos * 7 + (cpos * cpos * 3)) & 255) || 1;
+          if ((cpos * ${errorPrime}) % ${errorMod} < ${errorThreshold}) {
+            posKey = (posKey ^ ((${errorSeed} + cpos * 13) & 255)) & 255;
+          }
+          var ch = parseInt(v.substr(j, 2), 16) ^ posKey;
           s += String.fromCharCode(ch);
           h = (h + ch) & 255;
+          cpos++;
         }
         ${cacheName}[ci + ${baseOffset}] = s;
         prevKey = (k ^ h) & 255;

@@ -18,6 +18,7 @@ import { applyContextExhaustion } from './transforms/contextExhaustion';
 import { applyAntiDebug } from './transforms/antiDebug';
 import { applyTripwires } from './transforms/tripwires';
 import { applyNoiseInjection } from './transforms/noiseInjection';
+import { applySelfIntegrity } from './transforms/selfIntegrity';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 const { minify_sync } = require('terser');
@@ -191,6 +192,13 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // Collects all string literals into a rotated array, replaces with accessor calls
   // Runs last so it captures all strings including global+property name strings
   applyStringArrayExtraction(ast, budget);
+
+  // Self-integrity verification (Paper 10: dual-mode hash check)
+  // Checks that eval, toString, and code structure haven't been tampered with.
+  // Runs after all transforms so it checks the final obfuscated form.
+  if (budget.maxBloatRatio > 5) {
+    applySelfIntegrity(ast);
+  }
 
   // Prepend console stubs
   const consoleKeywords = buildConsoleKeywords();
