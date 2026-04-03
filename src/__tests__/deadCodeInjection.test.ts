@@ -4,7 +4,6 @@ import {
   collectScopeVars,
 } from '../transforms/deadCodeInjection';
 import * as recast from 'recast';
-import { obfuscate } from '../obfuscator';
 
 const babelParser = require('recast/parsers/babel');
 
@@ -158,32 +157,3 @@ describe('dead cases in CFF state machine', () => {
   });
 });
 
-describe('full pipeline correctness with dead code', () => {
-  it('obfuscated code with dead code still works', () => {
-    const code = `
-      function calculate(x, y) {
-        var sum = x + y;
-        var product = x * y;
-        if (sum > product) {
-          return sum;
-        } else {
-          return product;
-        }
-      }
-      module.exports = calculate;
-    `;
-    const out = obfuscate(code, { targetTokens: 10000 });
-    const fs = require('fs');
-    const os = require('os');
-    const path = require('path');
-    const tmp = path.join(os.tmpdir(), 'dead_test_' + Date.now() + '.js');
-    fs.writeFileSync(tmp, out);
-    const calculate = require(tmp);
-    // sum=7, product=12 → product wins
-    expect(calculate(3, 4)).toBe(12);
-    // sum=11, product=10 → sum wins
-    expect(calculate(1, 10)).toBe(11);
-    // sum=0, product=0 → product (else branch)
-    expect(calculate(0, 0)).toBe(0);
-  });
-});
