@@ -249,33 +249,29 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
 }
 
 /**
- * Collect top-level and function-body statements from an AST for use
- * as donor material in cross-file dead code mutation.
+ * Collect statements from an AST for use as donor material in
+ * cross-file dead code mutation. Only collects "simple" statements
+ * (variable declarations and expression statements) to keep memory
+ * bounded — large compound statements like class bodies or nested
+ * functions are skipped since they'd be expensive to clone/mutate.
  */
 function collectDonorStatements(code: string): any[] {
   const ast = recast.parse(code, {
     parser: require('recast/parsers/babel'),
   });
   const donors: any[] = [];
+  const SIMPLE_TYPES = new Set([
+    'VariableDeclaration',
+    'ExpressionStatement',
+    'ReturnStatement',
+  ]);
 
-  // Top-level statements
-  for (const stmt of ast.program.body) {
-    donors.push(stmt);
-  }
-
-  // Also collect statements from function bodies for richer donor material
   estraverse.traverse(ast.program, {
     keys: EXTRA_VISITOR_KEYS,
     enter(node: any) {
-      const isFn =
-        node.type === 'FunctionDeclaration' ||
-        node.type === 'FunctionExpression' ||
-        node.type === 'ArrowFunctionExpression' ||
-        node.type === 'ObjectMethod';
-      if (isFn && node.body && node.body.type === 'BlockStatement') {
-        for (const stmt of node.body.body) {
-          donors.push(stmt);
-        }
+      // Collect simple statements from top-level and function bodies
+      if (SIMPLE_TYPES.has(node.type)) {
+        donors.push(node);
       }
     },
     fallback: 'iteration',
@@ -283,6 +279,9 @@ function collectDonorStatements(code: string): any[] {
 
   return donors;
 }
+
+/** Cap for the cross-file donor pool to avoid OOM on large bundles. */
+const MAX_DONOR_STATEMENTS = 200;
 
 /**
  * Obfuscate multiple JavaScript files, using code from ALL files as
@@ -301,9 +300,22 @@ export function obfuscateMultiple(
   options?: Partial<ObfuscateOptions>,
 ): { filename: string; code: string }[] {
   // Phase 1: collect donor statements from ALL files
-  const allDonors: any[] = [];
+  let allDonors: any[] = [];
   for (const file of files) {
     allDonors.push(...collectDonorStatements(file.code));
+  }
+
+  // Cap the pool to avoid OOM on large bundles — randomly sample
+  if (allDonors.length > MAX_DONOR_STATEMENTS) {
+    const sampled: any[] = [];
+    for (let i = 0; i < MAX_DONOR_STATEMENTS; i++) {
+      const idx = Math.floor(Math.random() * allDonors.length);
+      sampled.push(allDonors[idx]);
+      // Swap-remove to avoid picking the same one twice
+      allDonors[idx] = allDonors[allDonors.length - 1];
+      allDonors.pop();
+    }
+    allDonors = sampled;
   }
 
   // Phase 2: set the shared donor pool and obfuscate each file
