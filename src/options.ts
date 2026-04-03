@@ -73,10 +73,10 @@ export function computeBloatBudget(inputChars: number, options: ObfuscateOptions
   const opaquePredicateProb = Math.min(0.30, headroom * 0.30);
 
   // Dead code multiplier: the primary volume lever.
-  // At maxBloatRatio=30 (tight), deadCodeMultiplier=1 (30% extra cases).
-  // At maxBloatRatio=1000 (lots of headroom), deadCodeMultiplier=~33
-  // (each real case gets ~10 dead cases, plus larger dead code blocks).
-  const deadCodeMultiplier = Math.min(150, maxBloatRatio / 10);
+  // Capped at 15 to avoid OOM — dead code generation is O(n*m) where n is
+  // real cases and m is multiplier, and each dead case generates multiple
+  // AST nodes that consume memory.
+  const deadCodeMultiplier = Math.min(15, maxBloatRatio / 50);
 
   return {
     targetChars,

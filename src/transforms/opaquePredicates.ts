@@ -432,7 +432,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
   const hasCFF = newBody.some((s: any) =>
     s.type === 'WhileStatement' && s.body?.body?.[0]?.type === 'SwitchStatement');
   if (!hasCFF && deadCodeSize >= 2) {
-    const extraBlocks = Math.min(30, deadCodeSize * 3);
+    const extraBlocks = Math.min(10, deadCodeSize * 2);
     for (let j = 0; j < extraBlocks; j++) {
       const pred = generatePredicate(false);
       probeInits.push(pred.probeInit);

@@ -19,6 +19,7 @@ import { applyAntiDebug } from './transforms/antiDebug';
 import { applyTripwires } from './transforms/tripwires';
 import { applyNoiseInjection } from './transforms/noiseInjection';
 import { applySelfIntegrity } from './transforms/selfIntegrity';
+import { applyRegexEncoding } from './transforms/regexEncoding';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 
 const { minify_sync } = require('terser');
@@ -187,6 +188,11 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     // Post-transform: number encoding
     applyNumberEncoding(ast);
   }
+
+  // Post-transform: regex encoding
+  // Converts /pattern/flags to new RegExp("pattern", "flags") so the
+  // pattern strings flow through string array extraction.
+  applyRegexEncoding(ast);
 
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls

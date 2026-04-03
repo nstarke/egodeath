@@ -473,7 +473,7 @@ export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[]
   const scopeVars = collectScopeVars(body);
   const deadCaseCount = Math.max(2, Math.floor(cases.length * 0.3 * deadCodeMul));
   // How many templates to combine per dead case (more = larger blocks)
-  const templatesPerCase = Math.min(5, Math.max(1, Math.floor(deadCodeMul / 5)));
+  const templatesPerCase = Math.min(3, Math.max(1, Math.floor(deadCodeMul / 10)));
   // Collect real case bodies for mutation-based dead code (Paper 3)
   const realCaseBodies = cases.filter(c => c.body.length > 1).map(c => c.body);
   const deadIds = generateStateIds(deadCaseCount);
