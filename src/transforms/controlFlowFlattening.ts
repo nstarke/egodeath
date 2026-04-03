@@ -357,7 +357,32 @@ function statementsOf(node: any): any[] {
 }
 
 /**
- * Build the while(true) { switch(_s) { cases... } } AST structure.
+ * Primes suitable for modular arithmetic state encoding.
+ * Must be coprime with the modulus (guaranteed since modulus is also prime).
+ */
+const MOD_PRIMES = [
+  104729, 104743, 104759, 104761, 104773,
+  104789, 104801, 104803, 104827, 104831,
+];
+
+const MOD_MULTIPLIERS = [
+  7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
+  43, 47, 53, 59, 61, 67, 71, 73, 79, 83,
+];
+
+/**
+ * Build the while(true) { switch(f(_s)) { cases... } } AST structure.
+ *
+ * Paper 3 (Subgroup Elimination): Instead of switching on _s directly,
+ * the discriminant is (_s * MULT) % MOD — a modular arithmetic
+ * transformation. The case values are the transformed state IDs.
+ * State assignments still use raw IDs; only the switch dispatch
+ * goes through the modular function.
+ *
+ * This means an analyzer looking at case values sees transformed
+ * numbers that don't correspond to the raw state IDs in assignments.
+ * Recovering the mapping requires solving (_s * MULT) % MOD = caseValue
+ * for each case, which requires knowing MULT and MOD.
  */
 function buildStateMachine(
   stateVar: string,
@@ -367,9 +392,28 @@ function buildStateMachine(
   // Shuffle case order so reading top-to-bottom reveals nothing
   shuffle(cases);
 
-  const switchCases = cases.map((c) =>
-    switchCase(numericLiteral(c.stateId), c.body)
-  );
+  // Pick random modular arithmetic parameters
+  const modulus = pick(MOD_PRIMES);
+  const multiplier = pick(MOD_MULTIPLIERS);
+
+  // Transform: each case's test value = (rawStateId * multiplier) % modulus
+  const switchCases = cases.map((c) => {
+    const encodedId = (c.stateId * multiplier) % modulus;
+    return switchCase(numericLiteral(encodedId), c.body);
+  });
+
+  // Discriminant: (_s * multiplier) % modulus
+  const discriminant = {
+    type: 'BinaryExpression',
+    operator: '%',
+    left: {
+      type: 'BinaryExpression',
+      operator: '*',
+      left: identifier(stateVar),
+      right: numericLiteral(multiplier),
+    },
+    right: numericLiteral(modulus),
+  };
 
   return {
     type: 'WhileStatement',
@@ -378,7 +422,7 @@ function buildStateMachine(
       type: 'BlockStatement',
       body: [{
         type: 'SwitchStatement',
-        discriminant: identifier(stateVar),
+        discriminant,
         cases: switchCases,
       }],
     },
