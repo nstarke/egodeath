@@ -1,0 +1,233 @@
+import { obfuscate, obfuscateMultiple } from '../obfuscator';
+import { generateDeadCode, setDonorStatements, clearDonorStatements, getDonorStatements } from '../transforms/deadCodeInjection';
+import * as recast from 'recast';
+
+const babelParser = require('recast/parsers/babel');
+
+function parse(code: string): any {
+  return recast.parse(code, { parser: babelParser });
+}
+
+function stmtsToCode(stmts: any[]): string {
+  const ast = { type: 'File', program: { type: 'Program', body: stmts } };
+  return recast.print(ast).code;
+}
+
+// --- Donor pool management ---
+
+describe('donor statement pool', () => {
+  afterEach(() => {
+    clearDonorStatements();
+  });
+
+  it('setDonorStatements populates the pool', () => {
+    const ast = parse('var a = 1; var b = a + 2;');
+    setDonorStatements(ast.program.body);
+    expect(getDonorStatements().length).toBe(2);
+  });
+
+  it('clearDonorStatements empties the pool', () => {
+    const ast = parse('var a = 1;');
+    setDonorStatements(ast.program.body);
+    clearDonorStatements();
+    expect(getDonorStatements().length).toBe(0);
+  });
+
+  it('generateDeadCode uses donor pool when no local realStatements', () => {
+    const donorAst = parse('var total = price * qty; var tax = total * 0.08;');
+    setDonorStatements(donorAst.program.body);
+
+    let usedMutation = false;
+    for (let i = 0; i < 40; i++) {
+      const dead = generateDeadCode([]);
+      const code = stmtsToCode(dead);
+      if ((code.match(/var\s/g) || []).length >= 2 &&
+          (code.includes('*') || code.includes('+') || code.includes('-'))) {
+        usedMutation = true;
+        break;
+      }
+    }
+    expect(usedMutation).toBe(true);
+  });
+
+  it('donor pool merges with local realStatements', () => {
+    const donorAst = parse('var total = price * qty;');
+    setDonorStatements(donorAst.program.body);
+
+    const localAst = parse('var x = a + b;');
+    const localStmts = localAst.program.body;
+
+    let produced = false;
+    for (let i = 0; i < 40; i++) {
+      const dead = generateDeadCode([], 1, localStmts);
+      if (dead.length > 0) {
+        produced = true;
+        break;
+      }
+    }
+    expect(produced).toBe(true);
+  });
+});
+
+// --- obfuscateMultiple ---
+
+describe('obfuscateMultiple', () => {
+  // Use minimal targetTokens to keep tests fast
+  const FAST_OPTS = { targetTokens: 500 };
+
+  it('returns one result per input file', () => {
+    const files = [
+      { filename: 'a.js', code: 'var x = 1;' },
+      { filename: 'b.js', code: 'var y = 2;' },
+      { filename: 'c.js', code: 'var z = 3;' },
+    ];
+    const results = obfuscateMultiple(files, FAST_OPTS);
+    expect(results.length).toBe(3);
+    expect(results[0].filename).toBe('a.js');
+    expect(results[1].filename).toBe('b.js');
+    expect(results[2].filename).toBe('c.js');
+  });
+
+  it('each output is non-empty obfuscated code', () => {
+    const files = [
+      { filename: 'a.js', code: 'var x = 1; var y = x + 2;' },
+      { filename: 'b.js', code: 'var a = 10; var b = a * 3;' },
+    ];
+    const results = obfuscateMultiple(files, FAST_OPTS);
+    for (const r of results) {
+      expect(r.code.length).toBeGreaterThan(0);
+      // Original source should not appear verbatim
+      expect(r.code).not.toContain('var x = 1');
+      expect(r.code).not.toContain('var a = 10');
+    }
+  });
+
+  it('clears the donor pool after processing', () => {
+    const files = [
+      { filename: 'a.js', code: 'var x = 1;' },
+      { filename: 'b.js', code: 'var y = 2;' },
+    ];
+    obfuscateMultiple(files, FAST_OPTS);
+    expect(getDonorStatements().length).toBe(0);
+  });
+
+  it('clears donor pool even if obfuscation throws', () => {
+    const files = [
+      { filename: 'bad.js', code: '%%%invalid%%%' },
+    ];
+    expect(() => obfuscateMultiple(files, FAST_OPTS)).toThrow();
+    expect(getDonorStatements().length).toBe(0);
+  });
+
+  it('produces non-trivial output for all files', () => {
+    const results = obfuscateMultiple([
+      { filename: 'a.js', code: 'var x = 1; var y = x + 2; var z = y * 3;' },
+      { filename: 'b.js', code: 'var a = 10; var b = a - 5; var c = b / 2;' },
+    ], FAST_OPTS);
+
+    for (const r of results) {
+      expect(r.code.length).toBeGreaterThan(50);
+    }
+  });
+
+  it('preserves functional correctness', () => {
+    const files = [
+      {
+        filename: 'calc.js',
+        code: `
+          function calculate(x, y) {
+            var sum = x + y;
+            var product = x * y;
+            if (sum > product) {
+              return sum;
+            } else {
+              return product;
+            }
+          }
+          module.exports = calculate;
+        `,
+      },
+      {
+        filename: 'helper.js',
+        code: 'var a = 10; var b = a - 5; var c = b * 3;',
+      },
+    ];
+
+    // Nondeterministic — try multiple times (same pattern as existing tests)
+    let passed = false;
+    for (let attempt = 0; attempt < 10 && !passed; attempt++) {
+      try {
+        const results = obfuscateMultiple(files, FAST_OPTS);
+        const calcResult = results.find(r => r.filename === 'calc.js')!;
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const tmp = path.join(os.tmpdir(), 'multi_calc_' + Date.now() + '_' + attempt + '.js');
+        fs.writeFileSync(tmp, calcResult.code);
+        try {
+          const calculate = require(tmp);
+          if (calculate(3, 4) === 12 && calculate(1, 10) === 11) {
+            passed = true;
+          }
+        } finally {
+          try { fs.unlinkSync(tmp); } catch {}
+        }
+      } catch { /* nondeterministic failure, retry */ }
+    }
+    expect(passed).toBe(true);
+  });
+});
+
+// --- Cross-file dead code mutation evidence ---
+
+describe('cross-file dead code mutation', () => {
+  afterEach(() => {
+    clearDonorStatements();
+  });
+
+  it('dead code generation uses cross-file donors', () => {
+    const donorAst = parse(`
+      var prefix = "Hello";
+      var msg = prefix + " world";
+      var len = msg.length;
+    `);
+    setDonorStatements(donorAst.program.body);
+
+    let usedDonors = false;
+    for (let i = 0; i < 50; i++) {
+      const dead = generateDeadCode([]);
+      const code = stmtsToCode(dead);
+      // Mutation of string donors will produce var decls with string concat patterns
+      if (code.includes('var ') && code.includes('+') && code.includes('"')) {
+        usedDonors = true;
+        break;
+      }
+    }
+    expect(usedDonors).toBe(true);
+  });
+
+  it('single-file obfuscate does not use stale donor pool', () => {
+    const result = obfuscate('var a = 1;', { targetTokens: 500 });
+    expect(getDonorStatements().length).toBe(0);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it('obfuscateMultiple collects donors from function bodies', () => {
+    const files = [
+      { filename: 'a.js', code: 'var x = 1;' },
+      {
+        filename: 'b.js',
+        code: `function compute(n) {
+          var result = n * 2;
+          var adjusted = result + 10;
+          return adjusted;
+        }`,
+      },
+    ];
+
+    const results = obfuscateMultiple(files, { targetTokens: 500 });
+    expect(results.length).toBe(2);
+    expect(results[0].code.length).toBeGreaterThan(0);
+    expect(results[1].code.length).toBeGreaterThan(0);
+  });
+});

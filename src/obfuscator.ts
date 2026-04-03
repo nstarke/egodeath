@@ -21,6 +21,7 @@ import { applyNoiseInjection } from './transforms/noiseInjection';
 import { applySelfIntegrity } from './transforms/selfIntegrity';
 import { applyRegexEncoding } from './transforms/regexEncoding';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
+import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
 
 const { minify_sync } = require('terser');
 
@@ -245,4 +246,74 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   }
 
   return output;
+}
+
+/**
+ * Collect top-level and function-body statements from an AST for use
+ * as donor material in cross-file dead code mutation.
+ */
+function collectDonorStatements(code: string): any[] {
+  const ast = recast.parse(code, {
+    parser: require('recast/parsers/babel'),
+  });
+  const donors: any[] = [];
+
+  // Top-level statements
+  for (const stmt of ast.program.body) {
+    donors.push(stmt);
+  }
+
+  // Also collect statements from function bodies for richer donor material
+  estraverse.traverse(ast.program, {
+    keys: EXTRA_VISITOR_KEYS,
+    enter(node: any) {
+      const isFn =
+        node.type === 'FunctionDeclaration' ||
+        node.type === 'FunctionExpression' ||
+        node.type === 'ArrowFunctionExpression' ||
+        node.type === 'ObjectMethod';
+      if (isFn && node.body && node.body.type === 'BlockStatement') {
+        for (const stmt of node.body.body) {
+          donors.push(stmt);
+        }
+      }
+    },
+    fallback: 'iteration',
+  } as any);
+
+  return donors;
+}
+
+/**
+ * Obfuscate multiple JavaScript files, using code from ALL files as
+ * donor material for dead code mutation.
+ *
+ * Dead code in each output file will be mutated from statements drawn
+ * from every input file, making structural analysis harder because
+ * the dead code doesn't necessarily match any code in the same file.
+ *
+ * @param files   - Array of {filename, code} pairs
+ * @param options - Optional configuration (target token budget, etc.)
+ * @returns Array of {filename, code} pairs with obfuscated output
+ */
+export function obfuscateMultiple(
+  files: { filename: string; code: string }[],
+  options?: Partial<ObfuscateOptions>,
+): { filename: string; code: string }[] {
+  // Phase 1: collect donor statements from ALL files
+  const allDonors: any[] = [];
+  for (const file of files) {
+    allDonors.push(...collectDonorStatements(file.code));
+  }
+
+  // Phase 2: set the shared donor pool and obfuscate each file
+  setDonorStatements(allDonors);
+  try {
+    return files.map(file => ({
+      filename: file.filename,
+      code: obfuscate(file.code, options),
+    }));
+  } finally {
+    clearDonorStatements();
+  }
 }

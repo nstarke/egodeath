@@ -105,6 +105,36 @@ function ret(arg: any): any {
   return { type: 'ReturnStatement', argument: arg };
 }
 
+// ---- Cross-file donor statement pool ----
+// When obfuscating multiple files, donor statements from ALL files are
+// collected here so that dead code in file A can be mutated from code
+// in file B/C/etc. This makes reverse-engineering harder because the
+// dead code doesn't structurally match ANY code in the current file.
+
+let _donorStatements: any[] = [];
+
+/**
+ * Set the cross-file donor statement pool.
+ * Called by obfuscateMultiple() before processing each file.
+ */
+export function setDonorStatements(stmts: any[]): void {
+  _donorStatements = stmts;
+}
+
+/**
+ * Get the current donor statement pool.
+ */
+export function getDonorStatements(): any[] {
+  return _donorStatements;
+}
+
+/**
+ * Clear the donor pool (e.g. after a batch run).
+ */
+export function clearDonorStatements(): void {
+  _donorStatements = [];
+}
+
 // ---- Scope variable collector ----
 
 /**
@@ -396,9 +426,15 @@ export function generateDeadCode(
   count?: number,
   realStatements?: any[],
 ): any[] {
-  // 50% chance: use mutation-based dead code when real statements available
-  if (realStatements && realStatements.length >= 2 && randInt(0, 1) === 0) {
-    return generateMutatedCode(realStatements);
+  // Build a combined donor pool: local real statements + cross-file donors
+  const allDonors: any[] = [
+    ...(realStatements || []),
+    ..._donorStatements,
+  ];
+
+  // 50% chance: use mutation-based dead code when donors available
+  if (allDonors.length >= 2 && randInt(0, 1) === 0) {
+    return generateMutatedCode(allDonors);
   }
   const n = count || randInt(1, 2);
   const templates = pickN(TEMPLATES, n);
