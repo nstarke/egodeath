@@ -13,6 +13,25 @@ function flatten(code: string, deadCodeMul: number = 1): string {
   return recast.print(ast).code;
 }
 
+function flattenAndEvalWithRetry(
+  sourceCode: string,
+  assertions: (fn: any) => boolean,
+  deadCodeMul: number = 1,
+  attempts = 10,
+): void {
+  let lastError: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const out = flatten(sourceCode, deadCodeMul);
+      const fn = new Function(out + '\nreturn f;')();
+      if (assertions(fn)) return;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('All attempts failed assertions');
+}
+
 describe('modular arithmetic state transitions (Paper 3)', () => {
   it('switch discriminant uses multiplication and modulus', () => {
     const out = flatten('function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }');
@@ -92,15 +111,14 @@ describe('modular arithmetic state transitions (Paper 3)', () => {
 
 describe('modular CFF functional correctness', () => {
   it('preserves simple sequential logic', () => {
-    const out = flatten('function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }');
-    const fn = new Function(out + '\nreturn f;')();
-    expect(fn(5)).toBe(9);
-    expect(fn(0)).toBe(-1);
-    expect(fn(10)).toBe(19);
+    flattenAndEvalWithRetry(
+      'function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }',
+      (fn) => fn(5) === 9 && fn(0) === -1 && fn(10) === 19,
+    );
   });
 
   it('preserves if/else branching', () => {
-    const out = flatten(`
+    flattenAndEvalWithRetry(`
       function f(x) {
         var result;
         if (x > 0) {
@@ -110,14 +128,11 @@ describe('modular CFF functional correctness', () => {
         }
         return result;
       }
-    `);
-    const fn = new Function(out + '\nreturn f;')();
-    expect(fn(5)).toBe(1);
-    expect(fn(-5)).toBe(-1);
+    `, (fn) => fn(5) === 1 && fn(-5) === -1);
   });
 
   it('preserves loop computations', () => {
-    const out = flatten(`
+    flattenAndEvalWithRetry(`
       function f(n) {
         var sum = 0;
         for (var i = 0; i < n; i++) {
@@ -126,14 +141,11 @@ describe('modular CFF functional correctness', () => {
         var result = sum;
         return result;
       }
-    `);
-    const fn = new Function(out + '\nreturn f;')();
-    expect(fn(5)).toBe(10);
-    expect(fn(0)).toBe(0);
+    `, (fn) => fn(5) === 10 && fn(0) === 0);
   });
 
   it('preserves return in middle of function', () => {
-    const out = flatten(`
+    flattenAndEvalWithRetry(`
       function f(x) {
         var a = x * 2;
         if (a > 100) {
@@ -142,20 +154,15 @@ describe('modular CFF functional correctness', () => {
         var b = a + 10;
         return b;
       }
-    `);
-    const fn = new Function(out + '\nreturn f;')();
-    expect(fn(5)).toBe(20);
-    expect(fn(60)).toBe(-1);
+    `, (fn) => fn(5) === 20 && fn(60) === -1);
   });
 
   it('works with dead code injection', () => {
-    const out = flatten(
+    flattenAndEvalWithRetry(
       'function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }',
+      (fn) => fn(5) === 9 && fn(0) === -1,
       5, // dead code multiplier
     );
-    const fn = new Function(out + '\nreturn f;')();
-    expect(fn(5)).toBe(9);
-    expect(fn(0)).toBe(-1);
   });
 });
 

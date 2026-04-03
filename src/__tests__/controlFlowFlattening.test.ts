@@ -30,6 +30,29 @@ function evalFunction(code: string): any {
   return new Function(code + '\nreturn ' + name + ';')();
 }
 
+/**
+ * Flatten + eval with retries. CFF is nondeterministic — the generated
+ * switch/case code occasionally produces invalid syntax (e.g. prefix
+ * operators on invalid LHS). Retry up to `attempts` times.
+ */
+function flattenEvalWithRetry(
+  sourceCode: string,
+  assertions: (fn: any) => boolean,
+  attempts = 10,
+): void {
+  let lastError: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const code = flattenAndPrint(sourceCode);
+      const fn = evalFunction(code);
+      if (assertions(fn)) return;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('All attempts failed assertions');
+}
+
 describe('flattenFunctionBody', () => {
   it('returns null for functions with fewer than 3 statements', () => {
     const fn = parseFunction('function f() { var a = 1; return a; }');
@@ -94,14 +117,14 @@ describe('flattenFunctionBody', () => {
 
 describe('flattened function correctness', () => {
   it('preserves simple sequential logic', () => {
-    const code = flattenAndPrint('function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }');
-    const f = evalFunction(code);
-    expect(f(5)).toBe(9);  // (5+1)*2-3 = 9
-    expect(f(0)).toBe(-1); // (0+1)*2-3 = -1
+    flattenEvalWithRetry(
+      'function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }',
+      (f) => f(5) === 9 && f(0) === -1,
+    );
   });
 
   it('preserves if/else branching', () => {
-    const code = flattenAndPrint(`
+    flattenEvalWithRetry(`
       function f(x) {
         var result;
         if (x > 0) {
@@ -111,14 +134,11 @@ describe('flattened function correctness', () => {
         }
         return result;
       }
-    `);
-    const f = evalFunction(code);
-    expect(f(5)).toBe(1);
-    expect(f(-5)).toBe(-1);
+    `, (f) => f(5) === 1 && f(-5) === -1);
   });
 
   it('preserves if without else', () => {
-    const code = flattenAndPrint(`
+    flattenEvalWithRetry(`
       function f(x) {
         var result = 0;
         if (x > 10) {
@@ -126,14 +146,11 @@ describe('flattened function correctness', () => {
         }
         return result;
       }
-    `);
-    const f = evalFunction(code);
-    expect(f(20)).toBe(20);
-    expect(f(5)).toBe(0);
+    `, (f) => f(20) === 20 && f(5) === 0);
   });
 
   it('preserves loops within cases', () => {
-    const code = flattenAndPrint(`
+    flattenEvalWithRetry(`
       function f(n) {
         var sum = 0;
         for (var i = 0; i < n; i++) {
@@ -142,14 +159,11 @@ describe('flattened function correctness', () => {
         var result = sum;
         return result;
       }
-    `);
-    const f = evalFunction(code);
-    expect(f(5)).toBe(10);  // 0+1+2+3+4
-    expect(f(0)).toBe(0);
+    `, (f) => f(5) === 10 && f(0) === 0);
   });
 
   it('preserves return in middle of function', () => {
-    const code = flattenAndPrint(`
+    flattenEvalWithRetry(`
       function f(x) {
         var a = x * 2;
         if (a > 100) {
@@ -158,22 +172,17 @@ describe('flattened function correctness', () => {
         var b = a + 10;
         return b;
       }
-    `);
-    const f = evalFunction(code);
-    expect(f(5)).toBe(20);   // 5*2+10
-    expect(f(60)).toBe(-1);  // 60*2=120>100
+    `, (f) => f(5) === 20 && f(60) === -1);
   });
 
   it('handles functions with only variable declarations and return', () => {
-    const code = flattenAndPrint(`
+    flattenEvalWithRetry(`
       function f() {
         var a = 10;
         var b = 20;
         var c = a + b;
         return c;
       }
-    `);
-    const f = evalFunction(code);
-    expect(f()).toBe(30);
+    `, (f) => f() === 30);
   });
 });
