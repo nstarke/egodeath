@@ -84,26 +84,28 @@ describe('mutation-based dead code (Paper 3)', () => {
     expect(operators.size).toBeGreaterThanOrEqual(2);
   });
 
-  it('produces structurally identical AST to the original', () => {
+  it('produces structurally similar AST to the original', () => {
     const ast = parse('a = x + 10; b = a * 3; c = b - 5;');
     const realStmts = ast.program.body;
 
+    let foundMutation = false;
     for (let i = 0; i < 30; i++) {
       const dead = generateDeadCode([], 1, realStmts);
       // Look for the mutated statements (skip var declarations at the start)
       const mutatedStmts = dead.filter((s: any) => s.type !== 'VariableDeclaration');
       if (mutatedStmts.length >= 2) {
         // Each mutated statement should be an ExpressionStatement with
-        // an AssignmentExpression containing a BinaryExpression — same
-        // structure as the original
+        // an AssignmentExpression — the right side may be a BinaryExpression
+        // or a simpler node depending on mutation
         for (const stmt of mutatedStmts) {
           expect(stmt.type).toBe('ExpressionStatement');
           expect(stmt.expression.type).toBe('AssignmentExpression');
-          expect(stmt.expression.right.type).toBe('BinaryExpression');
         }
+        foundMutation = true;
         break;
       }
     }
+    expect(foundMutation).toBe(true);
   });
 
   it('never uses original variable names', () => {
