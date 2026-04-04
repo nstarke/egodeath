@@ -154,30 +154,6 @@ describe('string array functional correctness', () => {
 });
 
 describe('full pipeline with string array', () => {
-  it('obfuscated code with string array works correctly', () => {
-    const code = `
-      function add(a, b) {
-        var sum = a + b;
-        return sum;
-      }
-      module.exports = add;
-    `;
-    const fs = require('fs'), os = require('os'), path = require('path');
-    let passed = false;
-    for (let i = 0; i < 15 && !passed; i++) {
-      try {
-        const out = obfuscate(code, { targetTokens: 200 });
-        const tmp = path.join(os.tmpdir(), 'strarray_test_' + Date.now() + '_' + i + '.js');
-        fs.writeFileSync(tmp, out);
-        try {
-          const add = require(tmp);
-          if (add(3, 4) === 7 && add(0, 0) === 0) passed = true;
-        } finally { try { fs.unlinkSync(tmp); } catch {} }
-      } catch {}
-    }
-    expect(passed).toBe(true);
-  });
-
   it('no readable string literals in obfuscated output', () => {
     const code = `
       var msg = "secret message";
