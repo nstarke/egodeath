@@ -369,6 +369,10 @@ function main() {
   const tempDir = path.join(projectRoot, '.tmp-packages');
 
   fs.mkdirSync(distDir, { recursive: true });
+  // Clean up stale temp directory from previous runs
+  if (fs.existsSync(tempDir)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(tempDir, { recursive: true });
 
   console.log(`Obfuscating packages: ${packages.join(', ')}`);
