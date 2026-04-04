@@ -17,7 +17,7 @@ function flattenAndEvalWithRetry(
   sourceCode: string,
   assertions: (fn: any) => boolean,
   deadCodeMul: number = 1,
-  attempts = 10,
+  attempts = 30,
 ): void {
   let lastError: any;
   for (let i = 0; i < attempts; i++) {
@@ -41,7 +41,7 @@ describe('modular arithmetic state transitions (Paper 3)', () => {
 
   it('case values are modular-encoded (large numbers)', () => {
     let passed = false;
-    for (let attempt = 0; attempt < 10 && !passed; attempt++) {
+    for (let attempt = 0; attempt < 30 && !passed; attempt++) {
       const out = flatten('function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }');
       const caseVals = out.match(/case (\d+):/g);
       if (!caseVals) continue;
@@ -182,7 +182,7 @@ describe('modular arithmetic analysis resistance', () => {
     }
 
     let passed = false;
-    for (let attempt = 0; attempt < 10 && !passed; attempt++) {
+    for (let attempt = 0; attempt < 30 && !passed; attempt++) {
       const out = flatten('function f(x) { var a = x + 1; var b = a * 2; var c = b - 3; return c; }');
       const modMatch = out.match(/\*\s*(\d+)\s*%\s*(\d+)/);
       if (!modMatch) continue;

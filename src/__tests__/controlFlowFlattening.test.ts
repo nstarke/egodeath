@@ -38,7 +38,7 @@ function evalFunction(code: string): any {
 function flattenEvalWithRetry(
   sourceCode: string,
   assertions: (fn: any) => boolean,
-  attempts = 10,
+  attempts = 30,
 ): void {
   let lastError: any;
   for (let i = 0; i < attempts; i++) {

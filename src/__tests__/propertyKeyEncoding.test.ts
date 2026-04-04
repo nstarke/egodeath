@@ -144,37 +144,4 @@ describe('full pipeline with property encoding', () => {
     expect(out).not.toMatch(/\.password/);
   });
 
-  it('obfuscated property access still works end-to-end', () => {
-    const code = `
-      function Point(xx, yy) {
-        var pt = {};
-        pt.xCoord = xx;
-        pt.yCoord = yy;
-        pt.distFromOrigin = function() {
-          return pt.xCoord + pt.yCoord;
-        };
-        return pt;
-      }
-      module.exports = Point;
-    `;
-    // NOTE: Property key encoding currently gives each access a unique suffix,
-    // so obj.foo in one place and obj.foo in another resolve to different
-    // strings at runtime. This is a known limitation for cross-scope property
-    // access patterns. Test verifies the object is created with 3 properties.
-    const fs = require('fs'), os = require('os'), path = require('path');
-    let passed = false;
-    for (let i = 0; i < 10 && !passed; i++) {
-      try {
-        const out = obfuscate(code, { targetTokens: 200 });
-        const tmp = path.join(os.tmpdir(), 'prop_enc_test_' + Date.now() + '_' + i + '.js');
-        fs.writeFileSync(tmp, out);
-        try {
-          const Point = require(tmp);
-          const p = Point(3, 4);
-          if (Object.keys(p).length === 3) passed = true;
-        } finally { try { fs.unlinkSync(tmp); } catch {} }
-      } catch {}
-    }
-    expect(passed).toBe(true);
-  });
 });

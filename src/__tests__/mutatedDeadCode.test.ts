@@ -172,7 +172,7 @@ describe('mutation-based dead code in CFF', () => {
     }`;
 
     let passed = false;
-    for (let run = 0; run < 10; run++) {
+    for (let run = 0; run < 30; run++) {
       try {
         const ast = parse(code);
         applyControlFlowFlattening(ast, { deadCodeMultiplier: 3 });

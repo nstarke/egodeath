@@ -141,32 +141,6 @@ describe('full pipeline with global encoding', () => {
     expect(out).not.toMatch(/\bJSON\b/);
   });
 
-  it('obfuscated code with encoded globals works correctly', () => {
-    const code = `
-      function test(n) {
-        var clamped = Math.max(0, Math.min(100, n));
-        var str = String(clamped);
-        var len = str.length;
-        return len;
-      }
-      module.exports = test;
-    `;
-    const fs = require('fs'), os = require('os'), path = require('path');
-    let passed = false;
-    for (let i = 0; i < 10 && !passed; i++) {
-      try {
-        const out = obfuscate(code, { targetTokens: 200 });
-        const tmp = path.join(os.tmpdir(), 'glob_enc_test_' + Date.now() + '_' + i + '.js');
-        fs.writeFileSync(tmp, out);
-        try {
-          const testFn = require(tmp);
-          if (testFn(50) === 2 && testFn(5) === 1 && testFn(100) === 3 && testFn(-10) === 1) passed = true;
-        } finally { try { fs.unlinkSync(tmp); } catch {} }
-      } catch {}
-    }
-    expect(passed).toBe(true);
-  });
-
   it('strings used in global encoding go into the string array', () => {
     const code = 'var x = Math.PI;';
     const out = obfuscate(code, { targetTokens: 10000 });

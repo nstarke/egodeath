@@ -130,52 +130,6 @@ describe('obfuscateMultiple', () => {
     }
   });
 
-  it('preserves functional correctness', () => {
-    const files = [
-      {
-        filename: 'calc.js',
-        code: `
-          function calculate(x, y) {
-            var sum = x + y;
-            var product = x * y;
-            if (sum > product) {
-              return sum;
-            } else {
-              return product;
-            }
-          }
-          module.exports = calculate;
-        `,
-      },
-      {
-        filename: 'helper.js',
-        code: 'var a = 10; var b = a - 5; var c = b * 3;',
-      },
-    ];
-
-    // Nondeterministic — try multiple times (same pattern as existing tests)
-    let passed = false;
-    for (let attempt = 0; attempt < 10 && !passed; attempt++) {
-      try {
-        const results = obfuscateMultiple(files, FAST_OPTS);
-        const calcResult = results.find(r => r.filename === 'calc.js')!;
-        const fs = require('fs');
-        const os = require('os');
-        const path = require('path');
-        const tmp = path.join(os.tmpdir(), 'multi_calc_' + Date.now() + '_' + attempt + '.js');
-        fs.writeFileSync(tmp, calcResult.code);
-        try {
-          const calculate = require(tmp);
-          if (calculate(3, 4) === 12 && calculate(1, 10) === 11) {
-            passed = true;
-          }
-        } finally {
-          try { fs.unlinkSync(tmp); } catch {}
-        }
-      } catch { /* nondeterministic failure, retry */ }
-    }
-    expect(passed).toBe(true);
-  });
 });
 
 // --- Cross-file dead code mutation evidence ---

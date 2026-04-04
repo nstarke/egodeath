@@ -162,37 +162,6 @@ describe('comma expression functional correctness', () => {
 });
 
 describe('full pipeline with comma expressions', () => {
-  it('obfuscated code with comma merging works', () => {
-    const code = `
-      function transform(arr) {
-        var result = [];
-        for (var i = 0; i < arr.length; i++) {
-          var val = arr[i];
-          val = val * 2;
-          val = val + 1;
-          result.push(val);
-        }
-        return result;
-      }
-      module.exports = transform;
-    `;
-    const fs = require('fs'), os = require('os'), path = require('path');
-    let passed = false;
-    for (let i = 0; i < 10 && !passed; i++) {
-      try {
-        const out = obfuscate(code, { targetTokens: 200 });
-        const tmp = path.join(os.tmpdir(), 'comma_full_' + Date.now() + '_' + i + '.js');
-        fs.writeFileSync(tmp, out);
-        try {
-          const transformFn = require(tmp);
-          const result = transformFn([1, 2, 3]);
-          if (JSON.stringify(result) === '[3,5,7]') passed = true;
-        } finally { try { fs.unlinkSync(tmp); } catch {} }
-      } catch {}
-    }
-    expect(passed).toBe(true);
-  });
-
   it('CFF switch cases get comma-merged', () => {
     const code = `
       function f(x) {

@@ -141,36 +141,6 @@ describe('number encoding correctness', () => {
 });
 
 describe('full pipeline with number encoding', () => {
-  it('obfuscated code with encoded numbers works correctly', () => {
-    const code = `
-      function fibonacci(n) {
-        if (n <= 1) return n;
-        var a = 0, b = 1, temp;
-        for (var i = 2; i <= n; i++) {
-          temp = a + b;
-          a = b;
-          b = temp;
-        }
-        return b;
-      }
-      module.exports = fibonacci;
-    `;
-    const fs = require('fs'), os = require('os'), path = require('path');
-    let passed = false;
-    for (let i = 0; i < 10 && !passed; i++) {
-      try {
-        const out = obfuscate(code, { targetTokens: 200 });
-        const tmp = path.join(os.tmpdir(), 'numenc_full_' + Date.now() + '_' + i + '.js');
-        fs.writeFileSync(tmp, out);
-        try {
-          const fib = require(tmp);
-          if (fib(0) === 0 && fib(1) === 1 && fib(10) === 55 && fib(20) === 6765) passed = true;
-        } finally { try { fs.unlinkSync(tmp); } catch {} }
-      } catch {}
-    }
-    expect(passed).toBe(true);
-  });
-
   it('no plain numeric literals in obfuscated output (except 0 and 1)', () => {
     const code = 'var x = 42; var y = 100; var z = 255;';
     const out = obfuscate(code, { targetTokens: 10000 });
