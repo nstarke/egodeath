@@ -493,9 +493,9 @@ const UNARY_OP_SWAPS: { [key: string]: string[] } = {
  * - Unary operators: swapped within equivalence groups
  * - Boolean literals: inverted
  */
-function mutateNode(node: any, nameMap: Map<string, string>): any {
+function mutateNode(node: any, nameMap: Map<string, string>, parent: any = null, parentKey: string | null = null): any {
   if (!node || typeof node !== 'object') return node;
-  if (Array.isArray(node)) return node.map(child => mutateNode(child, nameMap));
+  if (Array.isArray(node)) return node.map(child => mutateNode(child, nameMap, parent, parentKey));
 
   const clone: any = {};
   for (const key of Object.keys(node)) {
@@ -505,13 +505,31 @@ function mutateNode(node: any, nameMap: Map<string, string>): any {
         key === 'trailingComments' || key === 'innerComments') {
       continue;
     }
-    clone[key] = mutateNode(node[key], nameMap);
+    clone[key] = mutateNode(node[key], nameMap, node, key);
   }
+
+  // Is this literal sitting at a position with hard syntactic constraints?
+  // Object/class/member property keys accept only positive numeric or
+  // string literals — a perturbed value like `-47` emitted as a key
+  // literal produces `SyntaxError: Unexpected token '-'` at parse time.
+  const isPropertyKey =
+    parent && parentKey === 'key' &&
+    !parent.computed &&
+    (parent.type === 'Property' || parent.type === 'ObjectProperty' ||
+     parent.type === 'ObjectMethod' || parent.type === 'MethodDefinition' ||
+     parent.type === 'ClassMethod' || parent.type === 'ClassProperty' ||
+     parent.type === 'PropertyDefinition');
+  // switch case test values must remain literal for JS engines that
+  // optimize literal cases; negative is legal there but swapping values
+  // can change which branch runs.
+  const isSwitchCaseTest =
+    parent && parentKey === 'test' && parent.type === 'SwitchCase';
 
   // Mutate based on node type
   switch (clone.type) {
     case 'NumericLiteral':
     case 'Literal':
+      if (isPropertyKey || isSwitchCaseTest) break;
       if (typeof clone.value === 'number' && isFinite(clone.value)) {
         // Perturb: change by ±1 to ±50, or multiply by 2-5
         if (randInt(0, 1) === 0) {
@@ -531,6 +549,19 @@ function mutateNode(node: any, nameMap: Map<string, string>): any {
       break;
 
     case 'StringLiteral':
+      // Don't mutate string literals that are import/export module
+      // specifiers, require() arguments, or property keys where the
+      // change would produce a differently-shaped object. The dead
+      // code's semantics don't matter, but these string positions
+      // affect downstream parsing / later transforms.
+      if (isPropertyKey) break;
+      if (parent && parentKey === 'source' &&
+          (parent.type === 'ImportDeclaration' ||
+           parent.type === 'ExportNamedDeclaration' ||
+           parent.type === 'ExportAllDeclaration')) break;
+      if (parent && parentKey === 'arguments' && parent.type === 'CallExpression'
+          && parent.callee && parent.callee.type === 'Identifier'
+          && parent.callee.name === 'require') break;
       clone.value = gen().substring(0, Math.max(1, clone.value.length));
       if (clone.raw) delete clone.raw;
       if (clone.extra) delete clone.extra;
@@ -638,12 +669,45 @@ function generateMutatedCode(realStatements: any[]): any[] {
 }
 
 /**
- * Walk the given nodes and record every identifier that appears at a
- * declaration site (VariableDeclarator.id, FunctionDeclaration.id,
- * ClassDeclaration.id, parameters, or destructuring patterns). These are
- * names that already have their own declarations in the emitted code, so
- * generateMutatedCode must not emit synthetic `var X` declarations for
- * them on top.
+ * Extract every binding name from a declaration target (the `id` of a
+ * VariableDeclarator, the name of a FunctionDeclaration, a parameter,
+ * etc.). Handles destructuring patterns and default-value wrappers.
+ *
+ * Called only on nodes we KNOW are declaration targets. Must not recurse
+ * into reference positions — e.g. `obj[name] = v` is a reference to
+ * `obj` and `v`, not a declaration.
+ */
+function collectPatternBindings(node: any, out: Set<string>): void {
+  if (!node || typeof node !== 'object') return;
+  switch (node.type) {
+    case 'Identifier':
+      if (node.name) out.add(node.name);
+      return;
+    case 'ObjectPattern':
+      for (const p of node.properties || []) {
+        if (p.type === 'RestElement') collectPatternBindings(p.argument, out);
+        else collectPatternBindings(p.value || p.key, out);
+      }
+      return;
+    case 'ArrayPattern':
+      for (const e of node.elements || []) if (e) collectPatternBindings(e, out);
+      return;
+    case 'AssignmentPattern':
+      collectPatternBindings(node.left, out);
+      return;
+    case 'RestElement':
+      collectPatternBindings(node.argument, out);
+      return;
+  }
+}
+
+/**
+ * Walk the given statements and record every identifier that appears at
+ * a declaration site. Only declarations count — references (e.g.
+ * `obj[name] = v`) must NOT be added, otherwise the caller wrongly
+ * believes those names are already bound and skips emitting synthetic
+ * `var X = 0` preludes for them, producing a `ReferenceError` at
+ * runtime inside a CFF dead case.
  */
 function collectDeclaredNames(nodes: any, out: Set<string>): void {
   if (!nodes || typeof nodes !== 'object') return;
@@ -651,43 +715,57 @@ function collectDeclaredNames(nodes: any, out: Set<string>): void {
 
   switch (nodes.type) {
     case 'VariableDeclaration':
-      for (const d of nodes.declarations || []) collectDeclaredNames(d.id, out);
-      break;
-    case 'FunctionDeclaration':
-    case 'ClassDeclaration':
-    case 'FunctionExpression':
-    case 'ClassExpression':
-      if (nodes.id && nodes.id.name) out.add(nodes.id.name);
-      for (const p of nodes.params || []) collectDeclaredNames(p, out);
-      break;
-    case 'ArrowFunctionExpression':
-      for (const p of nodes.params || []) collectDeclaredNames(p, out);
-      break;
-    case 'Identifier':
-      if (nodes.name) out.add(nodes.name);
-      return;
-    case 'ObjectPattern':
-      for (const p of nodes.properties || []) {
-        if (p.type === 'RestElement') collectDeclaredNames(p.argument, out);
-        else collectDeclaredNames(p.value || p.key, out);
+      for (const d of nodes.declarations || []) {
+        collectPatternBindings(d.id, out);
+        // Descend into init — it may itself contain nested function/class
+        // declarations we need to know about (uncommon but legal).
+        if (d.init) collectDeclaredNames(d.init, out);
       }
       return;
-    case 'ArrayPattern':
-      for (const e of nodes.elements || []) if (e) collectDeclaredNames(e, out);
+    case 'FunctionDeclaration':
+    case 'ClassDeclaration':
+      if (nodes.id && nodes.id.name) out.add(nodes.id.name);
+      // Don't descend into the function body — inner declarations are
+      // scoped to the function and don't shadow the enclosing block.
       return;
-    case 'AssignmentPattern':
-      collectDeclaredNames(nodes.left, out);
+    case 'FunctionExpression':
+    case 'ClassExpression':
+    case 'ArrowFunctionExpression':
+    case 'ObjectMethod':
+    case 'ClassMethod':
+      // Parameters/methods belong to a nested scope. Whatever is declared
+      // inside them does not satisfy a declaration need at the enclosing
+      // scope, so we stop recursing here entirely.
       return;
-    case 'RestElement':
-      collectDeclaredNames(nodes.argument, out);
+    case 'CatchClause':
+      if (nodes.param) collectPatternBindings(nodes.param, out);
+      if (nodes.body) collectDeclaredNames(nodes.body, out);
       return;
+    case 'ForStatement':
+    case 'ForInStatement':
+    case 'ForOfStatement': {
+      // `for (var x = ...; …)` / `for (var x in …)` hoist the var.
+      if (nodes.init && nodes.init.type === 'VariableDeclaration' && nodes.init.kind === 'var') {
+        collectDeclaredNames(nodes.init, out);
+      }
+      if (nodes.left && nodes.left.type === 'VariableDeclaration' && nodes.left.kind === 'var') {
+        collectDeclaredNames(nodes.left, out);
+      }
+      if (nodes.body) collectDeclaredNames(nodes.body, out);
+      return;
+    }
   }
 
-  // Recurse into any remaining child nodes so we catch nested declarations
-  // inside block statements, if-bodies, switch cases, etc.
-  for (const key of Object.keys(nodes)) {
-    if (key === 'loc' || key === 'range' || key === 'type') continue;
-    const child = nodes[key];
+  // Default: descend into children that can hold statements. Expression
+  // bodies (AssignmentExpression, MemberExpression, …) do NOT hold
+  // declarations — skipping them prevents reference identifiers from
+  // being misread as bindings.
+  const STATEMENT_HOLDING_KEYS = [
+    'body', 'consequent', 'alternate', 'cases', 'block', 'handler',
+    'finalizer', 'init', 'declarations',
+  ];
+  for (const key of STATEMENT_HOLDING_KEYS) {
+    const child = (nodes as any)[key];
     if (child && typeof child === 'object') collectDeclaredNames(child, out);
   }
 }
