@@ -264,9 +264,19 @@ export interface OpaquePredicate {
 
 /**
  * Generate a random opaque predicate.
- * @param wantTrue  If specified, force true or false predicate.
+ * @param wantTrue       If specified, force true or false predicate.
+ * @param randomCallee   AST node to use as the random-number-generating
+ *                       callee in the probe init. Defaults to `Math.random`.
+ *                       Callers that inject probes into function bodies that
+ *                       may locally shadow `Math` (e.g. lodash's runInContext
+ *                       has `var Math = context.Math`) should pass a
+ *                       program-level capture instead, because `var` hoisting
+ *                       puts the local `Math` binding in scope at the top of
+ *                       the function — `Math.random()` in the probe then
+ *                       dereferences the not-yet-assigned local binding and
+ *                       throws "Cannot read properties of undefined".
  */
-export function generatePredicate(wantTrue?: boolean): OpaquePredicate {
+export function generatePredicate(wantTrue?: boolean, randomCallee?: any): OpaquePredicate {
   const probeVar = gen();
   const pool = wantTrue === true
     ? ALWAYS_TRUE_PREDICATES
@@ -277,9 +287,10 @@ export function generatePredicate(wantTrue?: boolean): OpaquePredicate {
   const factory = pick(pool);
   const { expr, alwaysTrue } = factory(probeVar);
 
-  // Probe init: var <probeVar> = (Math.random() * <k> | 0);
+  // Probe init: var <probeVar> = (<randomCallee>() * <k> | 0);
   // This produces a random non-negative integer that static analysis can't predict.
   const k = randInt(50, 500);
+  const callee = randomCallee || member(id('Math'), id('random'));
   const probeInit: any = {
     type: 'VariableDeclaration',
     kind: 'var',
@@ -287,7 +298,7 @@ export function generatePredicate(wantTrue?: boolean): OpaquePredicate {
       type: 'VariableDeclarator',
       id: id(probeVar),
       init: paren(bin('|',
-        bin('*', call(member(id('Math'), id('random')), []), num(k)),
+        bin('*', call(callee, []), num(k)),
         num(0))),
     }],
   };
@@ -351,6 +362,24 @@ export function applyOpaquePredicates(ast: any, budget?: any): void {
   const prob = budget ? budget.opaquePredicateProb : 0.30;
   const deadCodeSize = budget ? Math.min(4, Math.max(1, Math.floor(budget.deadCodeMultiplier / 3))) : 1;
 
+  // Capture `Math.random` at program level into a uniquely-named binding,
+  // BEFORE any function body runs. Probe inits then reference this captured
+  // binding instead of `Math.random` directly, so code that locally rebinds
+  // `Math` (e.g. lodash's `runInContext`: `var Math = context.Math`) can't
+  // cause the probe to resolve against an undefined-due-to-hoisting local.
+  const randomCaptureName = gen();
+  const randomCaptureDecl: any = {
+    type: 'VariableDeclaration',
+    kind: 'var',
+    declarations: [{
+      type: 'VariableDeclarator',
+      id: id(randomCaptureName),
+      init: member(id('Math'), id('random')),
+    }],
+  };
+  const randomCallee = () => id(randomCaptureName);
+
+  let injected = false;
   estraverse.traverse(ast.program, {
     keys: VISITOR_KEYS,
     enter(node: any) {
@@ -361,16 +390,28 @@ export function applyOpaquePredicates(ast: any, budget?: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        injectPredicates(node.body, prob, deadCodeSize);
+        if (injectPredicates(node.body, prob, deadCodeSize, randomCallee)) {
+          injected = true;
+        }
       }
     },
     fallback: 'iteration',
   } as any);
+
+  // Only prepend the capture if predicates were actually injected.
+  if (injected) {
+    ast.program.body.unshift(randomCaptureDecl);
+  }
 }
 
-function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): void {
+function injectPredicates(
+  body: any,
+  prob: number,
+  deadCodeSize: number = 1,
+  randomCallee?: () => any,
+): boolean {
   const stmts: any[] = body.body;
-  if (stmts.length < 2) return;
+  if (stmts.length < 2) return false;
 
   const scopeVars = collectScopeVars(stmts);
   const newBody: any[] = [];
@@ -401,7 +442,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
 
     // Wrap statement in always-true predicate (probability from budget)
     if (prob > 0 && randInt(1, 100) <= Math.round(prob * 100)) {
-      const pred = generatePredicate(true);
+      const pred = generatePredicate(true, randomCallee && randomCallee());
       probeInits.push(pred.probeInit);
       newBody.push({
         type: 'IfStatement',
@@ -418,7 +459,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
 
     // Inject dead code block before this statement (lower probability)
     if (prob > 0 && randInt(1, 100) <= Math.round(prob * 70)) {
-      const pred = generatePredicate(false);
+      const pred = generatePredicate(false, randomCallee && randomCallee());
       probeInits.push(pred.probeInit);
       newBody.push({
         type: 'IfStatement',
@@ -439,7 +480,7 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
   if (!hasCFF && deadCodeSize >= 2) {
     const extraBlocks = Math.min(10, deadCodeSize * 2);
     for (let j = 0; j < extraBlocks; j++) {
-      const pred = generatePredicate(false);
+      const pred = generatePredicate(false, randomCallee && randomCallee());
       probeInits.push(pred.probeInit);
       // Insert dead code at a random position in the body
       const pos = randInt(0, newBody.length);
@@ -454,4 +495,5 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
 
   // Insert probe inits at the top of the function body
   body.body = [...probeInits, ...newBody];
+  return probeInits.length > 0;
 }

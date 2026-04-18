@@ -147,13 +147,17 @@ describe('applyOpaquePredicates', () => {
       a = a * 4;
       return a;
     }`;
-    // Run multiple times since injection is probabilistic (~30% per statement)
+    // Run multiple times since injection is probabilistic (~30% per statement).
+    // Probes now call a program-level captured `Math.random` reference to
+    // survive local `var Math = ...` shadowing (see applyOpaquePredicates).
+    // The capture declaration `var X = Math.random;` is the signal that
+    // predicates were injected.
     let injected = false;
     for (let i = 0; i < 20; i++) {
       const ast = parse(code);
       applyOpaquePredicates(ast);
       const out = recast.print(ast).code;
-      if (out.includes('Math.random()')) {
+      if (/var\s+\S+\s*=\s*Math\.random(?!\()/.test(out)) {
         injected = true;
         break;
       }
