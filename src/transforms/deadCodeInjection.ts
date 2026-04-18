@@ -609,9 +609,20 @@ function generateMutatedCode(realStatements: any[]): any[] {
   const nameMap = new Map<string, string>();
   const mutated = slice.map(stmt => mutateNode(stmt, nameMap));
 
+  // Collect names that are already declared inside the mutated statements
+  // (as VariableDeclarators or FunctionDeclaration/ClassDeclaration ids).
+  // We must not emit a `var X` for those too, because that would mean two
+  // declarations of the same name in the same scope ("Identifier 'X' has
+  // already been declared"). Only names that are *referenced* but not
+  // *declared* inside the slice need a synthetic var to keep the code
+  // evaluable.
+  const declaredInSlice = new Set<string>();
+  collectDeclaredNames(mutated, declaredInSlice);
+
   // Wrap in a var declaration block so the fresh variables are declared
   const varDecls: any[] = [];
   for (const [, newName] of nameMap) {
+    if (declaredInSlice.has(newName)) continue;
     varDecls.push({
       type: 'VariableDeclaration',
       kind: 'var',
@@ -624,6 +635,61 @@ function generateMutatedCode(realStatements: any[]): any[] {
   }
 
   return [...varDecls, ...mutated];
+}
+
+/**
+ * Walk the given nodes and record every identifier that appears at a
+ * declaration site (VariableDeclarator.id, FunctionDeclaration.id,
+ * ClassDeclaration.id, parameters, or destructuring patterns). These are
+ * names that already have their own declarations in the emitted code, so
+ * generateMutatedCode must not emit synthetic `var X` declarations for
+ * them on top.
+ */
+function collectDeclaredNames(nodes: any, out: Set<string>): void {
+  if (!nodes || typeof nodes !== 'object') return;
+  if (Array.isArray(nodes)) { for (const n of nodes) collectDeclaredNames(n, out); return; }
+
+  switch (nodes.type) {
+    case 'VariableDeclaration':
+      for (const d of nodes.declarations || []) collectDeclaredNames(d.id, out);
+      break;
+    case 'FunctionDeclaration':
+    case 'ClassDeclaration':
+    case 'FunctionExpression':
+    case 'ClassExpression':
+      if (nodes.id && nodes.id.name) out.add(nodes.id.name);
+      for (const p of nodes.params || []) collectDeclaredNames(p, out);
+      break;
+    case 'ArrowFunctionExpression':
+      for (const p of nodes.params || []) collectDeclaredNames(p, out);
+      break;
+    case 'Identifier':
+      if (nodes.name) out.add(nodes.name);
+      return;
+    case 'ObjectPattern':
+      for (const p of nodes.properties || []) {
+        if (p.type === 'RestElement') collectDeclaredNames(p.argument, out);
+        else collectDeclaredNames(p.value || p.key, out);
+      }
+      return;
+    case 'ArrayPattern':
+      for (const e of nodes.elements || []) if (e) collectDeclaredNames(e, out);
+      return;
+    case 'AssignmentPattern':
+      collectDeclaredNames(nodes.left, out);
+      return;
+    case 'RestElement':
+      collectDeclaredNames(nodes.argument, out);
+      return;
+  }
+
+  // Recurse into any remaining child nodes so we catch nested declarations
+  // inside block statements, if-bodies, switch cases, etc.
+  for (const key of Object.keys(nodes)) {
+    if (key === 'loc' || key === 'range' || key === 'type') continue;
+    const child = nodes[key];
+    if (child && typeof child === 'object') collectDeclaredNames(child, out);
+  }
 }
 
 /**

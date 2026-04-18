@@ -3,4 +3,5 @@ sjcl
 dist
 dist-tools
 .tmp-packages
+.benchmark
 .claude

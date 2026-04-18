@@ -1,4 +1,4 @@
-import { gen, mkStr, choose, shuffle } from '../random';
+import { gen, mkStr, choose, shuffle, resetIssuedNames } from '../random';
 
 describe('mkStr', () => {
   it('returns a non-empty string', () => {
@@ -38,6 +38,25 @@ describe('gen', () => {
   it('returns a non-empty string', () => {
     const name = gen();
     expect(name.length).toBeGreaterThan(0);
+  });
+
+  it('never returns the same name twice within a run', () => {
+    resetIssuedNames();
+    const seen = new Set<string>();
+    const N = 5000;
+    for (let i = 0; i < N; i++) seen.add(gen());
+    expect(seen.size).toBe(N);
+  });
+
+  it('resetIssuedNames clears the tracked set', () => {
+    resetIssuedNames();
+    const first = gen();
+    resetIssuedNames();
+    // After reset, the same name could in theory be re-issued. We can't
+    // prove it by observing collisions directly (name space is huge), but
+    // we can verify the reset at least doesn't throw and gen still works.
+    expect(typeof first).toBe('string');
+    expect(gen().length).toBeGreaterThan(0);
   });
 });
 
