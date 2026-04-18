@@ -115,6 +115,249 @@ const workloads = {
       return cloned.length + Object.keys(grouped).length;
     },
   },
+
+  chalk: {
+    description: 'build styled terminal strings',
+    defaultIterations: 10000,
+    setup: (mod) => {
+      const chalk = mod.default || mod;
+      return { chalk };
+    },
+    step: (mod, state, i) => {
+      const c = state.chalk;
+      // Touch the main styling paths: direct colors, modifiers, chaining,
+      // and the template-tag-compatible call form.
+      const a = c.red('error');
+      const b = c.bold.blue('info');
+      const d = c.green.underline('ok ' + i);
+      const e = c.bgYellow.black('warn');
+      return a.length + b.length + d.length + e.length;
+    },
+  },
+
+  ms: {
+    description: 'parse + format time strings',
+    defaultIterations: 50000,
+    setup: () => ({
+      strings: [
+        '2 days', '1h', '30 minutes', '5s', '100ms',
+        '1.5 hours', '2 weeks', '1 year', '45 min', '10d',
+      ],
+      numbers: [
+        60_000, 3_600_000, 86_400_000, 604_800_000,
+        1_500, 500, 45_000, 1_000, 2_500_000, 10_000,
+      ],
+    }),
+    step: (mod, state, i) => {
+      const ms = mod.default || mod;
+      const s = state.strings[i % state.strings.length];
+      const n = state.numbers[i % state.numbers.length];
+      const parsed = ms(s);
+      const formatted = ms(n);
+      return (parsed | 0) ^ formatted.length;
+    },
+  },
+
+  qs: {
+    description: 'parse + stringify query strings',
+    defaultIterations: 10000,
+    setup: () => ({
+      queries: [
+        'a=1&b=2&c=3',
+        'arr[]=1&arr[]=2&arr[]=3',
+        'nested[a]=1&nested[b][c]=2',
+        'foo=bar&baz=qux&quux=corge',
+        'q=hello%20world&filter=active&page=2&sort=name',
+      ],
+      objects: [
+        { a: 1, b: 2, c: 3 },
+        { arr: [1, 2, 3, 4] },
+        { nested: { a: 1, b: { c: 2, d: 3 } } },
+        { tags: ['js', 'ts', 'node'], page: 5, sort: 'asc' },
+        { q: 'hello world', filters: { status: 'active', role: 'admin' } },
+      ],
+    }),
+    step: (mod, state, i) => {
+      const q = mod.default || mod;
+      const parsed = q.parse(state.queries[i % state.queries.length]);
+      const stringified = q.stringify(state.objects[i % state.objects.length]);
+      return Object.keys(parsed).length + stringified.length;
+    },
+  },
+
+  classnames: {
+    description: 'compose conditional className strings',
+    defaultIterations: 100000,
+    setup: () => ({
+      variants: [
+        ['foo', 'bar', 'baz'],
+        ['btn', { 'btn-primary': true, 'btn-disabled': false }],
+        [{ active: true }, { visible: false }, 'card'],
+        ['a', 'b', null, undefined, false, 'c', 0, { d: 1 }],
+        [['nested', 'array'], 'x', { y: 1, z: 0 }],
+      ],
+    }),
+    step: (mod, state, i) => {
+      const cn = mod.default || mod;
+      const args = state.variants[i % state.variants.length];
+      return cn(...args);
+    },
+  },
+
+  moment: {
+    description: 'parse + format + arithmetic on dates',
+    defaultIterations: 2000,
+    setup: (mod) => {
+      const moment = mod.default || mod;
+      return {
+        moment,
+        dates: [
+          '2023-01-01', '2024-06-15T12:30:00Z', '2020-12-31',
+          '1999-01-01', '2025-04-18T09:15:30',
+        ],
+        formats: [
+          'YYYY-MM-DD', 'dddd, MMMM Do YYYY', 'MMM D, YYYY [at] h:mm A',
+          'YYYY-MM-DDTHH:mm:ssZ', 'Q [quarter of] YYYY',
+        ],
+      };
+    },
+    step: (mod, state, i) => {
+      const m = state.moment;
+      const d = state.dates[i % state.dates.length];
+      const f = state.formats[i % state.formats.length];
+      const parsed = m(d);
+      parsed.format(f);
+      const later = parsed.clone().add(5, 'days').subtract(2, 'hours');
+      later.isBefore(parsed.clone().add(1, 'year'));
+      return later.diff(parsed, 'hours');
+    },
+  },
+
+  axios: {
+    description: 'create instances + register/eject interceptors',
+    // axios is fundamentally an HTTP client; benchmarking real requests
+    // would depend on a network, so instead we exercise the parts that
+    // run client-side: factory construction, config merging, and
+    // interceptor wiring. These dominate the synchronous cost before
+    // the network I/O begins.
+    defaultIterations: 500,
+    setup: (mod) => {
+      const axios = mod.default || mod;
+      return { axios };
+    },
+    step: (mod, state, i) => {
+      const ax = state.axios;
+      const inst = ax.create({
+        baseURL: 'https://example.invalid/api/' + (i % 10),
+        timeout: 1000 + (i % 100),
+        headers: {
+          'X-Bench': String(i),
+          'User-Agent': 'egodeath-bench/1.0',
+          'Accept': 'application/json',
+        },
+        params: { page: i % 50, limit: 20 },
+      });
+      // Register and eject a few interceptors on each side to exercise
+      // axios's InterceptorManager list management.
+      const h1 = inst.interceptors.request.use((cfg) => cfg);
+      const h2 = inst.interceptors.request.use((cfg) => cfg);
+      const h3 = inst.interceptors.response.use((r) => r);
+      inst.interceptors.request.eject(h1);
+      inst.interceptors.request.eject(h2);
+      inst.interceptors.response.eject(h3);
+      // Force defaults merge to run by creating a second instance off
+      // this one's defaults.
+      const inner = inst.create ? inst.create({ timeout: 2000 }) : inst;
+      return (inner.defaults ? Object.keys(inner.defaults).length : 0) + i;
+    },
+  },
+
+  express: {
+    description: 'build an app + router, exercise handler registration',
+    // Similar to axios: running a real HTTP server would be
+    // environment-dependent, so we exercise the synchronous setup
+    // paths — app creation, middleware registration, route matching
+    // via the internal router — which is where express spends most
+    // of the per-request cost.
+    defaultIterations: 500,
+    setup: (mod) => {
+      const express = mod.default || mod;
+      return { express };
+    },
+    step: (mod, state, i) => {
+      const express = state.express;
+      const app = express();
+      app.use((req, res, next) => next());
+      app.use('/api', (req, res, next) => next());
+      app.get('/users/:id', (req, res) => res.json({ id: req.params.id }));
+      app.post('/users', (req, res) => res.status(201).end());
+      app.put('/users/:id', (req, res) => res.json(req.body));
+      app.delete('/users/:id', (req, res) => res.status(204).end());
+      app.get('/items/:category/:id', (req, res) => res.json(req.params));
+
+      // Exercise the router's internal handle() path without a real
+      // request: build a minimal req/res pair and let express route it.
+      const router = app._router || app.router;
+      let matched = 0;
+      const req = {
+        method: 'GET',
+        url: '/users/' + (i % 100),
+        headers: {},
+        originalUrl: '/users/' + (i % 100),
+      };
+      const res = {
+        json: () => { matched++; },
+        status: () => res,
+        end: () => { matched++; },
+        setHeader: () => {},
+      };
+      try {
+        if (router && typeof router.handle === 'function') {
+          router.handle(req, res, () => {});
+        }
+      } catch (_) { /* some express internals poke at req fields we don't set */ }
+      return matched + i;
+    },
+  },
+
+  commander: {
+    description: 'parse CLI argv through a small program',
+    defaultIterations: 2000,
+    setup: (mod) => {
+      const { Command } = mod;
+      // Build a fresh program fresh each iteration is expensive; reuse
+      // across iterations but parse different argvs.
+      return {
+        Command,
+        argvs: [
+          ['node', 'prog', '--name', 'Alice', '--count', '3', 'input.txt'],
+          ['node', 'prog', '-v', '-v', 'file.json'],
+          ['node', 'prog', '--dry-run', '--output', '/tmp/x'],
+          ['node', 'prog', '--tag', 'a', '--tag', 'b', '--tag', 'c'],
+          ['node', 'prog', '--no-color', 'build'],
+        ],
+      };
+    },
+    step: (mod, state, i) => {
+      const program = new state.Command();
+      program
+        .name('bench')
+        .exitOverride() // don't call process.exit on parse errors
+        .option('-v, --verbose', 'verbose output', 0)
+        .option('-n, --name <name>', 'the name')
+        .option('-c, --count <n>', 'how many', (v) => parseInt(v, 10), 1)
+        .option('-t, --tag <tag...>', 'tags (repeatable)')
+        .option('-d, --dry-run', 'do not actually do it')
+        .option('-o, --output <path>', 'output path')
+        .option('--no-color', 'disable color')
+        .argument('[file]', 'input file');
+      try {
+        program.parse(state.argvs[i % state.argvs.length]);
+      } catch (_) { /* exitOverride throws on --help/--version; ignore */ }
+      const opts = program.opts();
+      return Object.keys(opts).length;
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------

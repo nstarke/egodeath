@@ -26,8 +26,19 @@ import { obfuscate } from '../src/obfuscator';
 
 // Packages the benchmark knows how to exercise. Workload definitions for
 // each live in benchmark-runner.js — keep these two lists in sync.
-const DEFAULT_PACKAGES = ['uuid', 'semver', 'minimist'];
-const ALL_PACKAGES = ['uuid', 'semver', 'minimist', 'lodash'];
+//
+// DEFAULT_PACKAGES are small-to-medium libraries that obfuscate quickly
+// (roughly < 1s each at the default target-tokens), so `npm run benchmark`
+// with no args returns in a reasonable time. Heavier packages like lodash
+// and moment can be requested by name or via --all.
+const DEFAULT_PACKAGES = [
+  'uuid', 'semver', 'minimist', 'chalk', 'ms', 'qs', 'classnames',
+];
+const ALL_PACKAGES = [
+  'uuid', 'semver', 'minimist', 'lodash',
+  'chalk', 'ms', 'qs', 'classnames', 'moment', 'commander',
+  'axios', 'express',
+];
 
 interface CliOptions {
   packages: string[];

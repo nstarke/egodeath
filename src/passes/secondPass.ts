@@ -88,12 +88,15 @@ export const secondPassHandlers: PassHandlerMap = {
     // propertyKeyEncoding transform handles hiding them via computed
     // access (`{[v]: 1}` where `v === "foo"` at runtime), preserving
     // semantics while still obscuring the name.
-    if (node.shorthand && node.key && node.value) {
-      // {foo} desugars to {foo: foo} — the value is a *variable
-      // reference* that must be renamed, while the key is a property
-      // name that must survive. When the AST uses the same node for
-      // both, substituting the value would also change the key. Split
-      // them into distinct nodes before substituting.
+    //
+    // Only expand shorthand when the value IS a plain Identifier tied to
+    // the key — i.e. the literal `{foo}` form. Destructuring-with-default
+    // like `{foo = NOOP}` also carries shorthand:true but wraps the
+    // binding in an AssignmentPattern we must preserve. Clobbering that
+    // value node drops the default and turns the local into `undefined`.
+    if (node.shorthand && node.key && node.value
+        && node.value.type === 'Identifier'
+        && node.value.name === node.key.name) {
       node.value = { type: 'Identifier', name: node.key.name };
       node.shorthand = false;
     }
@@ -403,7 +406,17 @@ export const secondPassHandlers: PassHandlerMap = {
     substitute(node.test);
     return node;
   },
-  SequenceExpression(node) { return node; },
+  SequenceExpression(node) {
+    // Each expression in a comma sequence is a standalone subexpression
+    // that may be a bare Identifier reference (commaExpressions can fold
+    // a tail `return x;` into `return (…, x);`). Without substituting
+    // each, bare identifiers survive unrenamed and trigger
+    // `ReferenceError: x is not defined` at runtime.
+    if (Array.isArray(node.expressions)) {
+      node.expressions.forEach((expr: ASTNode) => substitute(expr));
+    }
+    return node;
+  },
   EmptyStatement(node) { return node; },
   LabeledStatement(node) { return node; },
   BreakStatement(node) { return node; },
@@ -459,7 +472,14 @@ export const secondPassHandlers: PassHandlerMap = {
   // Babel uses ObjectProperty and ObjectMethod instead of Property
   ObjectProperty(node) {
     // See Property handler — same rationale: keep the property name.
-    if (node.shorthand && node.key && node.value) {
+    // Only split shorthand when the value is a plain same-named
+    // Identifier (`{foo}`). `{foo = default}` and other patterns carry
+    // shorthand:true but hold an AssignmentPattern / nested pattern in
+    // `.value` that must stay intact — overwriting it drops defaults and
+    // nested destructuring.
+    if (node.shorthand && node.key && node.value
+        && node.value.type === 'Identifier'
+        && node.value.name === node.key.name) {
       node.value = { type: 'Identifier', name: node.key.name };
       node.shorthand = false;
     }

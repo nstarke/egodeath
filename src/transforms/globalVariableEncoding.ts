@@ -161,6 +161,46 @@ function isGlobalReference(node: any, parent: any): boolean {
   if (parent.type === 'CatchClause' && parent.param === node) {
     return false;
   }
+  // Assignment target (`foo = x`, `foo += x`, etc.) — `eval(...)` is not
+  // an lvalue, so replacing `foo` on the LHS produces "Invalid left-hand
+  // side in assignment" at runtime.
+  if (parent.type === 'AssignmentExpression' && parent.left === node) {
+    return false;
+  }
+  // Update expression target (`foo++`, `--foo`) — same lvalue issue.
+  if (parent.type === 'UpdateExpression' && parent.argument === node) {
+    return false;
+  }
+  // For-in / for-of binding when the declaration form is `for (x in …)`
+  // (no `var`/`let`/`const`): `x` is an assignment target, not a
+  // reference. Replacing it produces an invalid lvalue.
+  if ((parent.type === 'ForInStatement' || parent.type === 'ForOfStatement')
+      && parent.left === node) {
+    return false;
+  }
+  // Destructuring pattern bindings: `{x} = obj` or `[x] = arr` where the
+  // Identifier is bound, not referenced.
+  if ((parent.type === 'ObjectPattern' || parent.type === 'ArrayPattern')) {
+    return false;
+  }
+  if (parent.type === 'RestElement' && parent.argument === node) {
+    return false;
+  }
+  if (parent.type === 'AssignmentPattern' && parent.left === node) {
+    return false;
+  }
+  // Object destructuring property value: `{foo: x} = obj` — `x` is a
+  // binding target if the enclosing pattern is a destructuring target.
+  // We conservatively skip Property/ObjectProperty values; the right
+  // side of object *literal* properties (`{foo: X}` where the enclosing
+  // is an ObjectExpression) is a reference and we'd want to encode it,
+  // but distinguishing needs grandparent info. Err on the side of
+  // correctness — globalVariableEncoding only matters for a small set of
+  // global identifiers (Math, Object, Array, …) and missing a few
+  // references is fine; mangling assignment targets is not.
+  if ((parent.type === 'Property' || parent.type === 'ObjectProperty') && parent.value === node) {
+    return false;
+  }
 
   return true;
 }

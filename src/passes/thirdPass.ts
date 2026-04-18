@@ -14,6 +14,22 @@ function hasRestParam(node: any): boolean {
 }
 
 /**
+ * Some function forms have hard constraints on arity:
+ *  - getters (`get x()` / `get [x]()`) must have 0 params
+ *  - setters (`set x(v)`) must have exactly 1 param
+ * Adding dummy params to either produces `SyntaxError: Getter must not
+ * have any formal parameters` at parse time. Skip these entirely.
+ *
+ * The `kind` field lives on the *enclosing* node (ObjectMethod,
+ * ClassMethod, MethodDefinition), not on the FunctionExpression that's
+ * its value. We accept both shapes here so the helper can be called
+ * from either handler.
+ */
+function isAccessor(node: any): boolean {
+  return node && (node.kind === 'get' || node.kind === 'set');
+}
+
+/**
  * Generate 0-15 random dummy identifier nodes for parameter injection.
  */
 export function addIdentifiers(): IdentifierNode[] {
@@ -41,7 +57,9 @@ export const thirdPassHandlers: PassHandlerMap = {
   NewExpression(node) { return node; },
   CallExpression(node) { return node; },
 
-  FunctionExpression(node) {
+  FunctionExpression(node: any) {
+    // Accessor flag is set by MethodDefinition handler (ESTree shape).
+    if (node.__egodeath_accessor) return node;
     if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
@@ -109,9 +127,31 @@ export const thirdPassHandlers: PassHandlerMap = {
   OptionalMemberExpression(node) { return node; },
   OptionalCallExpression(node) { return node; },
 
-  MethodDefinition(node) { return node; },
+  MethodDefinition(node) {
+    // ESTree-style: MethodDefinition wraps a FunctionExpression. If this
+    // is a getter or setter, mark the value function so the
+    // FunctionExpression handler won't inject dummy params into it.
+    if (isAccessor(node) && node.value) {
+      node.value.__egodeath_accessor = true;
+    }
+    return node;
+  },
 
   ObjectMethod(node) {
+    if (isAccessor(node)) return node;
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    return node;
+  },
+
+  // Babel represents class method definitions as ClassMethod (with params
+  // directly on the node). Constructors and get/set accessors have arity
+  // constraints — skip those.
+  ClassMethod(node: any) {
+    if (isAccessor(node)) return node;
+    // Constructors accept any arity, but webpack bundles sometimes rely
+    // on `Foo.length` reflecting the expected constructor arity. Skip to
+    // be safe.
+    if (node.kind === 'constructor') return node;
     if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
     return node;
   },
