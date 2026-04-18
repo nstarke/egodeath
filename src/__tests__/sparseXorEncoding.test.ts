@@ -35,19 +35,20 @@ describe('sparse XOR encoding (Paper 9)', () => {
 
   it('hex-encoded strings differ from uniform XOR', () => {
     // With position-dependent keys, each character in the same string
-    // is encoded with a different key. This means the hex pairs in
+    // is encoded with a different key. This means the hex groups in
     // the encoded string should show more variety than uniform XOR.
+    // 4 hex chars per input char — see sparseXorEncode.
     const out = extract('var x = "aaaaaa";');
-    const hexMatch = out.match(/"([0-9a-f]{12})"/);
+    const hexMatch = out.match(/"([0-9a-f]{24})"/);
     expect(hexMatch).not.toBeNull();
 
-    // In uniform XOR, "aaaaaa" would produce 6 identical hex pairs.
+    // In uniform XOR, "aaaaaa" would produce 6 identical groups.
     // With position-dependent keys, they should differ.
     const hex = hexMatch![1];
-    const pairs = [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6),
-                   hex.slice(6, 8), hex.slice(8, 10), hex.slice(10, 12)];
-    const unique = new Set(pairs);
-    // At least 2 different hex pairs (position-dependent makes them vary)
+    const groups = [hex.slice(0, 4), hex.slice(4, 8), hex.slice(8, 12),
+                    hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 24)];
+    const unique = new Set(groups);
+    // At least 2 different groups (position-dependent makes them vary)
     expect(unique.size).toBeGreaterThanOrEqual(2);
   });
 
@@ -96,6 +97,29 @@ describe('sparse XOR decoding correctness', () => {
     expect(fn()).toEqual(['x', 'longer string here', 'medium str']);
   });
 
+  it('decodes strings containing non-latin-1 characters', () => {
+    // Regression: the hex encoding formerly used 2 chars per input char,
+    // which desyncs when charCodeAt exceeds 0xFF. The chain uses the
+    // decoded string's char-code sum, so even one non-latin-1 char in any
+    // string in the chain corrupts every string after it. This mix
+    // covers BMP chars (> 0xFF) and surrogate halves (> 0x7FF).
+    const cases = [
+      'café',                    // latin-extended
+      'naïve résumé',            // accents
+      '日本語',                   // CJK
+      'Привет',                  // cyrillic
+      'αβγδε',                   // greek
+      'mix: α日本 café',          // combined
+      '🎉',                      // surrogate pair
+      'emoji 🔥 inline',          // surrogate pair inline
+    ];
+    const code = cases.map((s, i) => `var v${i} = ${JSON.stringify(s)};`).join('\n');
+    const out = extract(code);
+    const returnExpr = cases.map((_, i) => `v${i}`).join(', ');
+    const fn = new Function(out + `\nreturn [${returnExpr}];`);
+    expect(fn()).toEqual(cases);
+  });
+
   it('handles deduplicated strings', () => {
     const out = extract('var a = "same"; var b = "same"; var c = "same";');
     const fn = new Function(out + '\nreturn [a, b, c];');
@@ -120,18 +144,19 @@ describe('sparse XOR decoding correctness', () => {
 
 describe('sparse XOR analysis resistance', () => {
   it('same plaintext character at different positions produces different ciphertext', () => {
-    // "aaaa" should NOT produce 4 identical hex pairs
+    // "aaaaaaaaaa" (10 chars) should NOT produce 10 identical hex groups.
+    // 4 hex chars per input char → 40-char hex string.
     let foundVariation = false;
     for (let run = 0; run < 10; run++) {
       const out = extract('var x = "aaaaaaaaaa";');
-      const hexMatch = out.match(/"([0-9a-f]{20})"/);
+      const hexMatch = out.match(/"([0-9a-f]{40})"/);
       if (!hexMatch) continue;
       const hex = hexMatch[1];
-      const pairs: string[] = [];
-      for (let i = 0; i < hex.length; i += 2) {
-        pairs.push(hex.slice(i, i + 2));
+      const groups: string[] = [];
+      for (let i = 0; i < hex.length; i += 4) {
+        groups.push(hex.slice(i, i + 4));
       }
-      const unique = new Set(pairs);
+      const unique = new Set(groups);
       if (unique.size >= 3) {
         foundVariation = true;
         break;
@@ -144,7 +169,8 @@ describe('sparse XOR analysis resistance', () => {
     const encodings = new Set<string>();
     for (let i = 0; i < 10; i++) {
       const out = extract('var x = "Hello";');
-      const hexMatch = out.match(/"([0-9a-f]{10})"/);
+      // "Hello" is 5 chars × 4 hex chars per char = 20 hex chars
+      const hexMatch = out.match(/"([0-9a-f]{20})"/);
       if (hexMatch) encodings.add(hexMatch[1]);
     }
     // Different runs should produce different hex encodings

@@ -55,9 +55,22 @@ export function traverseNodeAddSwap(base: any, node: ASTNode): void {
       node.skipped = true;
     }
     if (node.property) {
-      const propName = node.property.name;
-      if (!isKeyword(propName) && !node.property.skipped) {
-        substitute(node.property, base);
+      // Only rename the property side when it's a *computed* access
+      // (`obj[expr]`) — there the "property" is really an expression that
+      // may reference a variable. For dotted access (`obj.foo`) the
+      // property name is a semantic part of the object's shape; renaming
+      // it silently changes obj.foo's name at runtime and breaks any
+      // external consumer (module.exports, webpack runtime helpers,
+      // Object.keys, reflection). Let propertyKeyEncoding hide these
+      // via computed access when budget allows, which preserves the
+      // string name at runtime.
+      if (node.computed) {
+        const propName = node.property.name;
+        if (!isKeyword(propName) && !node.property.skipped) {
+          substitute(node.property, base);
+        } else {
+          node.property.skipped = true;
+        }
       } else {
         node.property.skipped = true;
       }

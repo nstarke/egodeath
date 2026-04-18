@@ -379,9 +379,14 @@ function injectPredicates(body: any, prob: number, deadCodeSize: number = 1): vo
   for (let i = 0; i < stmts.length; i++) {
     const stmt = stmts[i];
 
-    // Skip declarations, returns, imports/exports — don't wrap these
+    // Skip declarations, returns, imports/exports — don't wrap these.
+    // FunctionDeclaration and ClassDeclaration are especially important:
+    // wrapping them in `if {}` makes them block-scoped, which hides the
+    // binding from the enclosing scope ("X is not defined" at later uses).
     const skip =
       stmt.type === 'VariableDeclaration' ||
+      stmt.type === 'FunctionDeclaration' ||
+      stmt.type === 'ClassDeclaration' ||
       stmt.type === 'ReturnStatement' ||
       stmt.type === 'ThrowStatement' ||
       stmt.type === 'ImportDeclaration' ||

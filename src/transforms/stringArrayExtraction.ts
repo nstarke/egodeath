@@ -91,8 +91,15 @@ function sparseXorEncode(
       posKey = (posKey ^ ((errorSeed + i * 13) & 0xFF)) & 0xFF;
     }
 
+    // Pad to 4 hex chars per input char: JS strings are UTF-16, so
+    // charCodeAt returns 0-65535. XOR-ing with an 8-bit posKey preserves
+    // the high byte, so encoded values can exceed 0xFF whenever the
+    // original char does. A 2-char group would desync the decoder at the
+    // first non-latin-1 character. 4 chars covers the full BMP (and
+    // surrogate halves for chars above BMP, which JS exposes as separate
+    // code units).
     const encoded = str.charCodeAt(i) ^ posKey;
-    hex += encoded.toString(16).padStart(2, '0');
+    hex += encoded.toString(16).padStart(4, '0');
   }
   return hex;
 }
@@ -366,12 +373,15 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
         var s = "";
         var h = 0;
         var cpos = 0;
-        for (var j = 0; j < v.length; j += 2) {
+        // 4 hex chars per input character — see sparseXorEncode. Changing
+        // this stride silently corrupts the whole chain from the first
+        // non-latin-1 char onward.
+        for (var j = 0; j < v.length; j += 4) {
           var posKey = ((k + cpos * 7 + (cpos * cpos * 3)) & 255) || 1;
           if ((cpos * ${errorPrime}) % ${errorMod} < ${errorThreshold}) {
             posKey = (posKey ^ ((${errorSeed} + cpos * 13) & 255)) & 255;
           }
-          var ch = parseInt(v.substr(j, 2), 16) ^ posKey;
+          var ch = parseInt(v.substr(j, 4), 16) ^ posKey;
           s += String.fromCharCode(ch);
           h = (h + ch) & 255;
           cpos++;

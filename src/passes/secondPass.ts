@@ -81,7 +81,26 @@ export const secondPassHandlers: PassHandlerMap = {
   ObjectExpression(node) { return node; },
 
   Property(node) {
-    substitute(node.key);
+    // Non-computed property keys ARE the public name of the property
+    // ({foo: 1} → obj.foo). Renaming them silently changes the object's
+    // shape, which breaks any external consumer (module.exports,
+    // Object.keys, webpack's runtime, etc.). Leave keys alone here; the
+    // propertyKeyEncoding transform handles hiding them via computed
+    // access (`{[v]: 1}` where `v === "foo"` at runtime), preserving
+    // semantics while still obscuring the name.
+    if (node.shorthand && node.key && node.value) {
+      // {foo} desugars to {foo: foo} — the value is a *variable
+      // reference* that must be renamed, while the key is a property
+      // name that must survive. When the AST uses the same node for
+      // both, substituting the value would also change the key. Split
+      // them into distinct nodes before substituting.
+      node.value = { type: 'Identifier', name: node.key.name };
+      node.shorthand = false;
+    }
+    if (node.computed) {
+      // Computed keys ({[expr]: val}) are expressions — substitute normally.
+      substitute(node.key);
+    }
     substitute(node.value);
     return node;
   },
@@ -249,6 +268,15 @@ export const secondPassHandlers: PassHandlerMap = {
   // Modern ES6+ node types
   ArrowFunctionExpression(node) {
     node.params.forEach((param: ASTNode) => substitute(param));
+    // Expression-body arrow `(x) => y`: when the body is a bare
+    // Identifier, no descendant handler ever renames it (the Identifier
+    // handler is a deliberate no-op to keep traversal cheap — renaming
+    // is driven by parent handlers calling substitute on their children).
+    // Without this, shapes like `() => DNS` leak the source name into
+    // the output and produce ReferenceError at runtime.
+    if (node.body && node.body.type === 'Identifier') {
+      substitute(node.body);
+    }
     return node;
   },
 
@@ -322,12 +350,15 @@ export const secondPassHandlers: PassHandlerMap = {
   ClassBody(node) { return node; },
 
   MethodDefinition(node) {
-    substitute(node.key);
+    // Only rename computed keys ({[expr](){}}); named methods are part
+    // of the class's public API.
+    if (node.computed) substitute(node.key);
     return node;
   },
 
   PropertyDefinition(node) {
-    substitute(node.key);
+    // Same rule as MethodDefinition — keep the declared property name.
+    if (node.computed) substitute(node.key);
     return node;
   },
 
@@ -413,13 +444,23 @@ export const secondPassHandlers: PassHandlerMap = {
 
   // Babel uses ObjectProperty and ObjectMethod instead of Property
   ObjectProperty(node) {
-    substitute(node.key);
+    // See Property handler — same rationale: keep the property name.
+    if (node.shorthand && node.key && node.value) {
+      node.value = { type: 'Identifier', name: node.key.name };
+      node.shorthand = false;
+    }
+    if (node.computed) {
+      substitute(node.key);
+    }
     substitute(node.value);
     return node;
   },
 
   ObjectMethod(node) {
-    substitute(node.key);
+    // Method names are property names — same rule as ObjectProperty keys.
+    if (node.computed) {
+      substitute(node.key);
+    }
     node.params.forEach((param: ASTNode) => substitute(param));
     return node;
   },

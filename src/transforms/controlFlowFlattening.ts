@@ -131,6 +131,17 @@ function hoistDeclarations(stmts: any[]): HoistResult {
   const transformed: any[] = [];
 
   for (const stmt of stmts) {
+    // FunctionDeclarations are hoisted by JS semantics. Leaving them
+    // inside a switch-case block would make them block-scoped under
+    // strict mode (ES6+), invisible outside the case. Webpack modules
+    // run under "use strict", so a declaration like `function
+    // __webpack_require__()` inside a case body would not be callable
+    // from sibling cases or from module callbacks that capture it.
+    // Hoist verbatim to before the while/switch.
+    if (stmt.type === 'FunctionDeclaration') {
+      hoisted.push(stmt);
+      continue;
+    }
     if (stmt.type === 'VariableDeclaration') {
       for (const decl of stmt.declarations) {
         const isDestructuring =
