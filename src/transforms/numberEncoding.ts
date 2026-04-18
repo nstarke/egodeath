@@ -14,6 +14,19 @@ function pick<T>(arr: T[]): T {
 // ---- AST builders ----
 
 function num(value: number): any {
+  // Represent negatives as `(-|value|)` — a parenthesized UnaryExpression.
+  // Two reasons we must wrap:
+  //   1) A bare negative NumericLiteral prints as "-5", which placed next
+  //      to a binary "-" collapses to "a--5" ("Invalid left-hand side in
+  //      prefix operation") in minified output.
+  //   2) recast prints `UnaryExpression(-, UnaryExpression(-, ...))` as
+  //      "--4" with no separating space — also tokenizing as decrement.
+  // Parenthesizing the unary minus forces recast to emit parens, which
+  // breaks both adjacencies and round-trips safely through terser.
+  if (value < 0) {
+    const u = unary('-', num(-value));
+    return paren(u);
+  }
   // Use hex representation sometimes for extra obscurity
   if (value > 9 && randInt(0, 1) === 1) {
     return { type: 'NumericLiteral', value, extra: { rawValue: value, raw: '0x' + value.toString(16) } };

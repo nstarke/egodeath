@@ -50,17 +50,60 @@ export function mkStr(): string {
 }
 
 /**
- * Generate a valid random variable name using Unicode characters.
- * Names are 6-16 code points long, drawn from dense Unicode ranges
- * that are valid JavaScript identifiers.
+ * Names already handed out during the current obfuscation run. Cleared
+ * between calls to obfuscate() via resetIssuedNames() so each output file
+ * starts fresh. Without this, two different source identifiers could pick
+ * the same random name and produce a "Identifier 'X' has already been
+ * declared" SyntaxError on load — the name space is vast, but not vast
+ * enough to rule out collisions on bundles with thousands of identifiers.
+ */
+const issuedNames = new Set<string>();
+
+/**
+ * Maximum gen() rerolls before we give up and append a numeric suffix.
+ * The unicode name space is astronomical, so in practice we'll never hit
+ * this — the cap exists only to make a bug produce a bad name instead of
+ * hanging forever.
+ */
+const MAX_COLLISION_RETRIES = 32;
+
+/**
+ * Clear the issued-names set. Called at the start of every obfuscate()
+ * invocation so names don't leak across runs.
+ */
+export function resetIssuedNames(): void {
+  issuedNames.clear();
+}
+
+/**
+ * Generate a valid, unique random variable name using Unicode characters.
+ * Names are 6-16 code points long, drawn from dense Unicode ranges that are
+ * valid JavaScript identifiers. Uniqueness is guaranteed within a single
+ * obfuscate() call by tracking every issued name.
  */
 export function gen(): string {
-  let name = mkStr();
-  // In the rare case the name isn't valid, retry
-  while (!isVarName(name)) {
-    name = mkStr();
+  for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
+    let name = mkStr();
+    while (!isVarName(name)) name = mkStr();
+    if (!issuedNames.has(name)) {
+      issuedNames.add(name);
+      return name;
+    }
   }
-  return name;
+
+  // Vanishingly unlikely: after dozens of rerolls we keep colliding. Fall
+  // back to a deterministic disambiguation so we still produce runnable
+  // output. The suffix is itself just digits, which isValidVarName won't
+  // accept as a first character, so we prepend to an existing random stem.
+  let base = mkStr();
+  while (!isVarName(base)) base = mkStr();
+  let counter = 0;
+  while (issuedNames.has(base) && counter < 1_000_000) {
+    base = base + (counter % 10);
+    counter++;
+  }
+  issuedNames.add(base);
+  return base;
 }
 
 /**

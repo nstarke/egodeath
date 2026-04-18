@@ -27,11 +27,20 @@ describe('applyNumberEncoding', () => {
     expect(out).toMatch(/[<<>>|^~*\/+-]/);
   });
 
-  it('produces unique expressions for the same number', () => {
-    const out = transform('var a = 42; var b = 42; var c = 42;');
-    const matches = out.match(/=\s*(.+?);/g)!;
-    const unique = new Set(matches);
-    expect(unique.size).toBe(matches.length);
+  it('produces diverse expressions for the same number', () => {
+    // Encoding is randomized: each call picks one of ~11 strategies and
+    // fills in random constants. Across many samples we should see many
+    // distinct outputs. Asserting strict uniqueness of just 3 samples is
+    // flaky — the space is large but not so large that every 3-tuple
+    // avoids collisions. Instead, assert meaningful variety over a much
+    // larger sample so independent collisions don't fail the test.
+    const samples = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const out = transform('var x = 42;');
+      const m = out.match(/=\s*(.+?);/);
+      if (m) samples.add(m[1]);
+    }
+    expect(samples.size).toBeGreaterThanOrEqual(10);
   });
 
   it('does not encode 0', () => {
@@ -151,5 +160,42 @@ describe('full pipeline with number encoding', () => {
     expect(out).not.toMatch(/=\s*42\s*;/);
     expect(out).not.toMatch(/=\s*100\s*;/);
     expect(out).not.toMatch(/=\s*255\s*;/);
+  });
+});
+
+describe('regression: adjacent unary minus does not decay to decrement', () => {
+  // Two adjacent unary minus operators (e.g. inside complementNeg when the
+  // intermediate value is negative) used to render as `--4` in the output,
+  // which tokenizes as the decrement operator and fails with
+  // "Invalid left-hand side expression in prefix operation".
+  // Negative values must round-trip as parenthesized unary expressions.
+
+  for (const n of [-2, -10, -42, -100, -128, -1000]) {
+    it(`encodes ${n} without producing a '--' token`, () => {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const out = transform(`var x = ${n};`);
+        expect(out).not.toMatch(/--(?=\d|\()/);
+        // The encoded form must also evaluate back to n.
+        const result = new Function(out + '\nreturn x;')();
+        expect(result).toBe(n);
+      }
+    });
+  }
+
+  it('does not emit `--` in a full obfuscation pass on a negative-heavy input', () => {
+    const code = `
+      function f() {
+        var a = -42, b = -100, c = -255, d = -1000;
+        var e = a - b + c - d;
+        return e + (-7) - (-3);
+      }
+    `;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const out = obfuscate(code, { targetTokens: 10000 });
+      // Decrement-without-target should never appear in the output.
+      expect(out).not.toMatch(/[^\-]--\d/);
+      // And the output must still parse as a program.
+      expect(() => new Function(out)).not.toThrow();
+    }
   });
 });

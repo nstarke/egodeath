@@ -2,6 +2,7 @@ import * as recast from 'recast';
 import * as estraverse from 'estraverse';
 import { ASTNode, PassHandlerMap } from './types';
 import { resetGlobals, resetWindowProps } from './globals';
+import { resetIssuedNames } from './random';
 import { buildConsoleKeywords } from './keywords';
 import { firstPassHandlers } from './passes/firstPass';
 import { secondPassHandlers } from './passes/secondPass';
@@ -97,6 +98,7 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // Reset global state for each run
   resetGlobals();
   resetWindowProps();
+  resetIssuedNames();
 
   // Strip shebang line if present — parsers can't handle it
   let shebang = '';
@@ -216,6 +218,17 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // Normalize CRLF → LF so terser and regex fallback work on all platforms
   output = output.replace(/\r\n?/g, '\n');
 
+  // Safety net: recast prints `UnaryExpression(-, NumericLiteral(-n))` as
+  // "--n" with no separator — the two `-` glyphs collide into the decrement
+  // token, which is only valid on an lvalue and raises "Invalid left-hand
+  // side expression in prefix operation" on load. Transforms try to avoid
+  // emitting that structure, but rare construction paths still sneak it
+  // through. Normalize by inserting a space between `--` and a following
+  // digit so the two unary minuses stay separate tokens. `--ident` (prefix
+  // decrement on a variable) is untouched because the regex anchors on a
+  // trailing digit.
+  output = output.replace(/--(\d)/g, '- -$1');
+
   // Final pass: minify to strip whitespace and formatting
   // Uses terser with no mangling (no variable renaming) and minimal
   // compression (no dead code elimination) to preserve all obfuscation
@@ -244,6 +257,12 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
       .replace(/\n+/g, '')                 // join all lines
       .replace(/\s{2,}/g, ' ');            // collapse multiple spaces
   }
+
+  // Re-apply the `--digit` safety net after minification/fallback — both
+  // paths can re-collapse whitespace in ways that could resurface the
+  // decrement-on-literal token (e.g., a `-\n-1` sequence becoming `--1`
+  // when newlines are stripped in the fallback path).
+  output = output.replace(/--(\d)/g, '- -$1');
 
   return output;
 }
