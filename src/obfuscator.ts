@@ -213,6 +213,29 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   const consoleKeywords = buildConsoleKeywords();
   ast.program.body = consoleKeywords.concat(ast.program.body);
 
+  // Strip original source positions from every node before printing.
+  // Recast preserves original whitespace/ASI when a node still carries its
+  // parse-time `start`/`end`/`loc`. For code we've structurally rewritten
+  // (and we rewrite almost everything), that preservation resurrects
+  // hazards — notably ASI-reliant inputs like `const x = f()\nexports = ...`
+  // get reprinted with no semicolon, so wrapping the next statement in
+  // `(…)` via contextExhaustion turns two statements into a call
+  // (`f()(…)`) and silently changes semantics. Force fresh formatting.
+  estraverse.traverse(ast.program, {
+    keys: EXTRA_VISITOR_KEYS,
+    enter(node: any) {
+      // Some of these are non-configurable on recast Node instances, so
+      // delete may throw. Fall back to assignment, which is what recast
+      // checks.
+      try { delete node.start; } catch { node.start = undefined; }
+      try { delete node.end; } catch { node.end = undefined; }
+      try { delete node.loc; } catch { node.loc = undefined; }
+      try { delete node.range; } catch { node.range = undefined; }
+      try { delete node.original; } catch { node.original = undefined; }
+    },
+    fallback: 'iteration',
+  } as any);
+
   let output = shebang + recast.print(ast).code;
 
   // Normalize CRLF → LF so terser and regex fallback work on all platforms

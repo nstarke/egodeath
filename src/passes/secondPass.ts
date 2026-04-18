@@ -362,6 +362,20 @@ export const secondPassHandlers: PassHandlerMap = {
     return node;
   },
 
+  ClassMethod(node) {
+    // Babel uses ClassMethod (params directly on the node) where ESTree
+    // has MethodDefinition.value = FunctionExpression. The method name
+    // (key) is a property and must survive obfuscation, but the params
+    // are local bindings that need to be renamed consistently with the
+    // body's references to them. Without this, a `constructor(comp)
+    // { ...comp... }` leaves `comp` in the signature while every usage
+    // in the body is renamed, producing `ReferenceError: comp is not
+    // defined` at runtime.
+    if (node.computed) substitute(node.key);
+    if (node.params) node.params.forEach((param: ASTNode) => substitute(param));
+    return node;
+  },
+
   ForOfStatement(node) {
     substitute(node.left);
     substitute(node.right);
