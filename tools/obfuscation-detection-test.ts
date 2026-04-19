@@ -24,11 +24,65 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { obfuscate } from '../src/obfuscator';
+import { execFileSync } from 'child_process';
+import { obfuscate, obfuscateMultiple } from '../src/obfuscator';
+
+/** Absolute path to the project root (parent of `tools/`). */
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+/**
+ * Return the current git HEAD commit SHA so every report is tied to
+ * the exact version of the obfuscator that produced it. Falls back to
+ * 'unknown' if the working tree is not a repository or `git` isn't on
+ * PATH — we don't want a missing git binary to derail the run.
+ */
+function gitHeadSha(): string {
+  try {
+    const out = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: PROJECT_ROOT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.toString('utf-8').trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Return true when the working tree has uncommitted changes relative
+ * to HEAD. Used to annotate the report — a dirty tree means the
+ * committed SHA doesn't fully identify the code that ran.
+ */
+function gitIsDirty(): boolean {
+  try {
+    const out = execFileSync('git', ['status', '--porcelain'], {
+      cwd: PROJECT_ROOT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.toString('utf-8').trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Filesystem-safe timestamp slug for log filenames, local time:
+ *   2026-04-19_14-30-45
+ * Colons and slashes out so the string is portable across shells and
+ * file managers.
+ */
+function timestampSlug(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`
+  );
+}
 
 interface CliOptions {
   runs: number;
   targetTokens: number;
+  minDeltaBytes: number;
   maxDeltaBytes: number;
   maxResizeAttempts: number;
   model: string;
@@ -42,8 +96,9 @@ function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     runs: 10,
     targetTokens: 25_000,
+    minDeltaBytes: 100_000,
     maxDeltaBytes: 250_000,
-    maxResizeAttempts: 4,
+    maxResizeAttempts: 6,
     model: 'gpt-4o',
     sourceDir: path.resolve(__dirname, '..', 'tests'),
     verbose: false,
@@ -53,6 +108,7 @@ function parseArgs(argv: string[]): CliOptions {
     const a = argv[i];
     if (a === '--runs' || a === '-n') opts.runs = Number(argv[++i]);
     else if (a === '--target-tokens') opts.targetTokens = Number(argv[++i]);
+    else if (a === '--min-delta') opts.minDeltaBytes = Number(argv[++i]);
     else if (a === '--max-delta') opts.maxDeltaBytes = Number(argv[++i]);
     else if (a === '--max-resize-attempts') opts.maxResizeAttempts = Number(argv[++i]);
     else if (a === '--model') opts.model = argv[++i];
@@ -78,8 +134,12 @@ function parseArgs(argv: string[]): CliOptions {
     console.error('--target-tokens must be >= 1000');
     process.exit(2);
   }
-  if (!Number.isFinite(opts.maxDeltaBytes) || opts.maxDeltaBytes < 0) {
-    console.error('--max-delta must be a non-negative integer');
+  if (!Number.isFinite(opts.minDeltaBytes) || opts.minDeltaBytes < 0) {
+    console.error('--min-delta must be a non-negative integer');
+    process.exit(2);
+  }
+  if (!Number.isFinite(opts.maxDeltaBytes) || opts.maxDeltaBytes <= opts.minDeltaBytes) {
+    console.error('--max-delta must be a positive integer greater than --min-delta');
     process.exit(2);
   }
   return opts;
@@ -89,8 +149,16 @@ function printUsage(): void {
   console.log(`Usage: ts-node tools/obfuscation-detection-test.ts [options]
 
 For each trial, randomly chooses between:
-  (SAME)      one source module, obfuscated twice with fresh randomness
-  (DIFFERENT) two distinct source modules, each obfuscated once
+  (SAME)      one source module, obfuscated twice with DIFFERENT target-token
+              budgets — the two outputs are sized so their byte delta lands
+              in [--min-delta, --max-delta], removing size as a trivial
+              signal for SAME and forcing the model to reason about
+              semantic invariants.
+  (DIFFERENT) two distinct source modules, obfuscated TOGETHER via the
+              multi-file pipeline. This shares the dead-code donor pool
+              between them and pads both string arrays to the same length,
+              so structural cues that usually separate different sources
+              (array size, per-file literal distribution) are neutralised.
 
 Both samples are submitted to the OpenAI Chat Completions API ("ChatGPT"),
 which is asked to classify them as SAME or DIFFERENT. Ground-truth from the
@@ -100,13 +168,16 @@ Options:
   --runs, -n <n>            Number of trials (default: 10)
   --target-tokens <n>       Starting obfuscation target tokens (default: 25000)
                             Smaller = smaller samples = fewer API tokens used.
-  --max-delta <bytes>       Maximum allowed byte-size difference between the
-                            two samples in a trial (default: 250000)
-  --max-resize-attempts <n> How many re-obfuscations to run per trial while
-                            trying to bring the pair under --max-delta
-                            (default: 4). Each extra attempt scales
-                            target-tokens of the smaller sample up toward
-                            the size of the larger.
+  --min-delta <bytes>       Minimum byte-size difference between the two SAME
+                            samples (default: 100000). Forces the model to
+                            decide WITHOUT using size as a tell.
+  --max-delta <bytes>       Maximum byte-size difference between the two SAME
+                            samples (default: 250000).
+  --max-resize-attempts <n> For SAME trials only — how many re-obfuscations
+                            to run while trying to bring the pair's byte
+                            delta into the [--min-delta, --max-delta] range
+                            (default: 6). Each extra attempt adjusts the
+                            second sample's target-tokens.
   --model <name>            OpenAI model name (default: gpt-4o)
   --source-dir <dir>        Directory containing .js source files
                             (default: ./tests)
@@ -153,8 +224,7 @@ interface Sample {
   bytes: number;
 }
 
-function obfuscateSource(sourcePath: string, targetTokens: number): Sample {
-  const src = fs.readFileSync(sourcePath, 'utf-8');
+function obfuscateOne(src: string, sourcePath: string, targetTokens: number): Sample {
   const content = obfuscate(src, { targetTokens });
   return {
     sourcePath,
@@ -164,40 +234,113 @@ function obfuscateSource(sourcePath: string, targetTokens: number): Sample {
   };
 }
 
-// Rebalance target-tokens so the two samples end up within maxDeltaBytes.
-// Each attempt scales up the smaller sample's target-tokens by the byte
-// ratio of the pair. This converges quickly when output bytes scale
-// roughly linearly with target-tokens (which the obfuscator's bloat
-// budget is designed to do).
-function produceBalancedPair(
-  srcA: string,
-  srcB: string,
-  startTokens: number,
+/**
+ * SAME-trial pair: obfuscate the same source twice at DIFFERENT
+ * target-token budgets so the byte delta between the two outputs
+ * falls within [minDeltaBytes, maxDeltaBytes]. The point is to make
+ * size a red herring — the model sees "these two differ in size by
+ * 150 KB" and has to decide SAME or DIFFERENT on semantic grounds,
+ * not on output volume.
+ *
+ * Starts with A at `baseTokens` and B at 3x, then nudges B up or
+ * down based on the measured delta. Convergence is fast because
+ * output bytes scale roughly linearly with target-tokens within the
+ * bloat budget's operating range.
+ */
+function produceSameSourcePair(
+  src: string,
+  sourcePath: string,
+  baseTokens: number,
+  minDeltaBytes: number,
   maxDeltaBytes: number,
   maxAttempts: number,
 ): { a: Sample; b: Sample; attempts: number; converged: boolean } {
-  let a = obfuscateSource(srcA, startTokens);
-  let b = obfuscateSource(srcB, startTokens);
+  let tokensA = baseTokens;
+  let tokensB = Math.max(baseTokens + 1000, Math.round(baseTokens * 3));
+  let a = obfuscateOne(src, sourcePath, tokensA);
+  let b = obfuscateOne(src, sourcePath, tokensB);
   let attempts = 1;
 
-  while (Math.abs(a.bytes - b.bytes) > maxDeltaBytes && attempts < maxAttempts) {
-    if (a.bytes < b.bytes) {
-      const ratio = b.bytes / Math.max(1, a.bytes);
-      const nextTokens = Math.max(1000, Math.round(a.targetTokens * ratio));
-      a = obfuscateSource(srcA, nextTokens);
+  while (attempts < maxAttempts) {
+    const delta = Math.abs(a.bytes - b.bytes);
+    if (delta >= minDeltaBytes && delta <= maxDeltaBytes) break;
+
+    // Always adjust the larger-token side (which usually maps to the
+    // larger byte side) so the smaller sample stays anchored and the
+    // adjustments converge on the target window.
+    const target = delta < minDeltaBytes
+      // Gap too narrow — push them apart.
+      ? (minDeltaBytes + maxDeltaBytes) / 2
+      // Gap too wide — pull them together.
+      : (minDeltaBytes + maxDeltaBytes) / 2;
+    // Linear byte→token scaling: take the side we want to grow/shrink,
+    // compute its per-token byte rate, and jump to the token count
+    // that should produce the target gap.
+    const bigger = b.bytes >= a.bytes ? 'b' : 'a';
+    if (bigger === 'b') {
+      const rate = b.bytes / Math.max(1, b.targetTokens);
+      const desiredB = a.bytes + target;
+      tokensB = Math.max(1000, Math.round(desiredB / Math.max(1, rate)));
+      // Keep A pinned; any resize attempts fan out from here.
+      b = obfuscateOne(src, sourcePath, tokensB);
     } else {
-      const ratio = a.bytes / Math.max(1, b.bytes);
-      const nextTokens = Math.max(1000, Math.round(b.targetTokens * ratio));
-      b = obfuscateSource(srcB, nextTokens);
+      const rate = a.bytes / Math.max(1, a.targetTokens);
+      const desiredA = b.bytes + target;
+      tokensA = Math.max(1000, Math.round(desiredA / Math.max(1, rate)));
+      a = obfuscateOne(src, sourcePath, tokensA);
     }
     attempts++;
   }
 
+  const finalDelta = Math.abs(a.bytes - b.bytes);
   return {
     a,
     b,
     attempts,
-    converged: Math.abs(a.bytes - b.bytes) <= maxDeltaBytes,
+    converged: finalDelta >= minDeltaBytes && finalDelta <= maxDeltaBytes,
+  };
+}
+
+/**
+ * DIFFERENT-trial pair: obfuscate two distinct sources TOGETHER via
+ * obfuscateMultiple. That shares the dead-code donor pool between
+ * the two files and normalises their string arrays to the same
+ * length with samples drawn from both files' literals — features a
+ * reader might otherwise use to separate "these are different
+ * source modules" from "these are the same module twice".
+ *
+ * No size rebalancing here: the multi-file pipeline already equalises
+ * the most visible per-file shape (the string array), and letting
+ * the total bytes reflect natural source differences keeps the test
+ * honest about what remains detectable downstream.
+ */
+function produceDifferentSourcesPair(
+  srcAPath: string,
+  srcBPath: string,
+  targetTokens: number,
+): { a: Sample; b: Sample } {
+  const srcA = fs.readFileSync(srcAPath, 'utf-8');
+  const srcB = fs.readFileSync(srcBPath, 'utf-8');
+  const results = obfuscateMultiple(
+    [
+      { filename: path.basename(srcAPath), code: srcA },
+      { filename: path.basename(srcBPath), code: srcB },
+    ],
+    { targetTokens },
+  );
+  return {
+    a: {
+      sourcePath: srcAPath,
+      targetTokens,
+      content: results[0].code,
+      bytes: Buffer.byteLength(results[0].code, 'utf-8'),
+    },
+    b: {
+      sourcePath: srcBPath,
+      targetTokens,
+      content: results[1].code,
+      bytes: Buffer.byteLength(results[1].code, 'utf-8'),
+    },
   };
 }
 
@@ -300,20 +443,37 @@ async function runTrial(
   const actual: 'SAME' | 'DIFFERENT' = Math.random() < 0.5 ? 'SAME' : 'DIFFERENT';
   let srcA: string;
   let srcB: string;
+  let a: Sample;
+  let b: Sample;
+  let attempts = 1;
+  let converged = true;
+
   if (actual === 'SAME') {
     srcA = pickOne(sources);
     srcB = srcA;
+    const src = fs.readFileSync(srcA, 'utf-8');
+    const r = produceSameSourcePair(
+      src,
+      srcA,
+      opts.targetTokens,
+      opts.minDeltaBytes,
+      opts.maxDeltaBytes,
+      opts.maxResizeAttempts,
+    );
+    a = r.a;
+    b = r.b;
+    attempts = r.attempts;
+    converged = r.converged;
   } else {
     [srcA, srcB] = pickTwoDistinct(sources);
+    const r = produceDifferentSourcesPair(srcA, srcB, opts.targetTokens);
+    a = r.a;
+    b = r.b;
+    // DIFFERENT uses obfuscateMultiple once — no resize loop, so
+    // "converged" is always true by construction.
+    attempts = 1;
+    converged = true;
   }
-
-  const { a, b, attempts, converged } = produceBalancedPair(
-    srcA,
-    srcB,
-    opts.targetTokens,
-    opts.maxDeltaBytes,
-    opts.maxResizeAttempts,
-  );
 
   if (opts.dumpDir) {
     fs.mkdirSync(opts.dumpDir, { recursive: true });
@@ -438,9 +598,35 @@ function printSummary(trials: TrialResult[], opts: CliOptions): void {
   const anyOverLimit = trials.some((t) => !t.error && !t.converged);
   if (anyOverLimit) {
     console.log(
-      '\n  * delta exceeded --max-delta after exhausting resize attempts.',
+      '\n  * SAME-trial delta landed outside [--min-delta, --max-delta] after exhausting resize attempts.',
     );
   }
+}
+
+/**
+ * Mirror every chunk written to `process.stdout` into `sink` while
+ * still forwarding to the real terminal. Used to capture the run's
+ * console output verbatim for a human-readable `.txt` log. Returns
+ * a restore callback — calling it reverts stdout back to the original
+ * implementation, so the tee stays scoped to the run rather than
+ * leaking into anything that imports this file as a library.
+ */
+function teeStdout(sink: string[]): () => void {
+  const original = process.stdout.write.bind(process.stdout);
+  const patched = function (this: any, chunk: any, ...rest: any[]): any {
+    if (typeof chunk === 'string') sink.push(chunk);
+    else if (chunk && typeof (chunk as Buffer).toString === 'function') {
+      sink.push((chunk as Buffer).toString('utf-8'));
+    }
+    // `process.stdout.write` has several overloads (string + encoding,
+    // string + encoding + cb, buffer + cb, …). Cast through `any` to
+    // forward every variant cleanly without re-declaring the union.
+    return (original as any)(chunk, ...rest);
+  };
+  (process.stdout as any).write = patched;
+  return () => {
+    (process.stdout as any).write = original;
+  };
 }
 
 async function main(): Promise<void> {
@@ -459,53 +645,103 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log('egodeath obfuscation-detection evaluation');
-  console.log(`  runs:          ${opts.runs}`);
-  console.log(`  model:         ${opts.model}`);
-  console.log(`  source-dir:    ${opts.sourceDir} (${sources.length} .js files)`);
-  console.log(`  target-tokens: ${opts.targetTokens.toLocaleString()} (starting)`);
-  console.log(`  max-delta:     ${opts.maxDeltaBytes.toLocaleString()} bytes`);
-  if (opts.dumpDir) console.log(`  dump-dir:      ${opts.dumpDir}`);
-  console.log('');
+  // Decide the log paths up front so both the JSON and TXT sinks
+  // share the same timestamp slug — makes it trivial to pair them
+  // up afterwards ("the txt and json next to each other are from the
+  // same run").
+  const slug = timestampSlug();
+  const logsDir = path.resolve(PROJECT_ROOT, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  const jsonLogPath = path.join(logsDir, `detect_${slug}.json`);
+  const txtLogPath = path.join(logsDir, `detect_${slug}.txt`);
 
-  const trials: TrialResult[] = [];
-  for (let i = 0; i < opts.runs; i++) {
-    process.stdout.write(`  [trial ${i + 1}/${opts.runs}] obfuscating + querying ${opts.model}... `);
-    const t = await runTrial(i, sources, opts, apiKey);
-    trials.push(t);
-    if (t.error) {
-      console.log(`ERROR: ${t.error.slice(0, 200)}`);
-    } else {
-      const marker = t.predicted === 'UNKNOWN' ? '?' : t.match ? 'OK' : 'MISS';
-      const deltaTag = t.converged ? '' : ` (delta ${fmtKB(t.deltaBytes)} > ${fmtKB(opts.maxDeltaBytes)})`;
-      console.log(
-        `actual=${t.actual} predicted=${t.predicted} [${marker}] ` +
-          `sizes=${fmtKB(t.bytesA)}/${fmtKB(t.bytesB)}${deltaTag}`,
-      );
-      if (opts.verbose && t.rawResponse) {
-        const short = t.rawResponse.replace(/\s+/g, ' ').slice(0, 200);
-        console.log(`      reply: ${short}`);
+  // Start tee'ing stdout into a buffer NOW so the pre-run banner,
+  // every per-trial progress line, and the summary all end up in the
+  // txt log. Errors inside the try still get their output captured
+  // because the tee stays on until the finally block restores
+  // stdout.
+  const stdoutBuffer: string[] = [];
+  const restoreStdout = teeStdout(stdoutBuffer);
+
+  try {
+    const sha = gitHeadSha();
+    const dirty = gitIsDirty();
+    const shaDisplay = sha === 'unknown' ? 'unknown' : sha.slice(0, 10) + (dirty ? ' (dirty)' : '');
+
+    console.log('egodeath obfuscation-detection evaluation');
+    console.log(`  runs:          ${opts.runs}`);
+    console.log(`  model:         ${opts.model}`);
+    console.log(`  git HEAD:      ${shaDisplay}`);
+    console.log(`  source-dir:    ${opts.sourceDir} (${sources.length} .js files)`);
+    console.log(`  target-tokens: ${opts.targetTokens.toLocaleString()} (SAME-trial base, DIFFERENT-trial fixed)`);
+    console.log(`  delta range:   ${opts.minDeltaBytes.toLocaleString()} – ${opts.maxDeltaBytes.toLocaleString()} bytes (SAME trials)`);
+    console.log(`  DIFFERENT:     obfuscateMultiple (shared donor pool + normalized string arrays)`);
+    if (opts.dumpDir) console.log(`  dump-dir:      ${opts.dumpDir}`);
+    console.log('');
+
+    const trials: TrialResult[] = [];
+    for (let i = 0; i < opts.runs; i++) {
+      process.stdout.write(`  [trial ${i + 1}/${opts.runs}] obfuscating + querying ${opts.model}... `);
+      const t = await runTrial(i, sources, opts, apiKey);
+      trials.push(t);
+      if (t.error) {
+        console.log(`ERROR: ${t.error.slice(0, 200)}`);
+      } else {
+        const marker = t.predicted === 'UNKNOWN' ? '?' : t.match ? 'OK' : 'MISS';
+        // Only SAME trials target a specific delta window; DIFFERENT
+        // trials don't rebalance and converged is always true by
+        // construction, so no tag is appended for them.
+        const deltaTag = t.converged
+          ? ''
+          : ` (delta ${fmtKB(t.deltaBytes)} outside [${fmtKB(opts.minDeltaBytes)}, ${fmtKB(opts.maxDeltaBytes)}])`;
+        console.log(
+          `actual=${t.actual} predicted=${t.predicted} [${marker}] ` +
+            `sizes=${fmtKB(t.bytesA)}/${fmtKB(t.bytesB)}${deltaTag}`,
+        );
+        if (opts.verbose && t.rawResponse) {
+          const short = t.rawResponse.replace(/\s+/g, ' ').slice(0, 200);
+          console.log(`      reply: ${short}`);
+        }
       }
     }
-  }
 
-  printSummary(trials, opts);
+    printSummary(trials, opts);
 
-  if (opts.outputJson) {
-    fs.mkdirSync(path.dirname(opts.outputJson), { recursive: true });
-    fs.writeFileSync(
-      opts.outputJson,
-      JSON.stringify(
-        {
-          options: opts,
-          timestamp: new Date().toISOString(),
-          trials,
-        },
-        null,
-        2,
-      ),
-    );
-    console.log(`\n  JSON report written: ${opts.outputJson}`);
+    // Always persist the run. logs/ was created above; the filename
+    // is keyed by local-time stamp so successive runs don't clobber
+    // each other, and the git HEAD SHA goes into the report itself
+    // so results stay pinned to the exact obfuscator build that
+    // produced them.
+    const report = {
+      options: opts,
+      timestamp: new Date().toISOString(),
+      gitCommit: sha,
+      gitDirty: dirty,
+      trials,
+    };
+    fs.writeFileSync(jsonLogPath, JSON.stringify(report, null, 2));
+    console.log(`\n  JSON report written: ${path.relative(process.cwd(), jsonLogPath)}`);
+    console.log(`  TXT  report written: ${path.relative(process.cwd(), txtLogPath)}`);
+
+    // Preserve the explicit --output flag as an additional sink when
+    // the operator wants the report somewhere specific (CI artefacts,
+    // a shared drop directory, etc.). The auto log is still written.
+    if (opts.outputJson && path.resolve(opts.outputJson) !== jsonLogPath) {
+      fs.mkdirSync(path.dirname(opts.outputJson), { recursive: true });
+      fs.writeFileSync(opts.outputJson, JSON.stringify(report, null, 2));
+      console.log(`  JSON report written: ${opts.outputJson}`);
+    }
+  } finally {
+    // Restore first so the write below (and anything the shell
+    // prints after main returns) doesn't re-enter the capture.
+    restoreStdout();
+    try {
+      fs.writeFileSync(txtLogPath, stdoutBuffer.join(''));
+    } catch (e) {
+      // Don't let a log-write failure mask a real error from the
+      // main body — just surface it and move on.
+      process.stderr.write(`warning: could not write txt log to ${txtLogPath}: ${(e as Error)?.message ?? e}\n`);
+    }
   }
 }
 
