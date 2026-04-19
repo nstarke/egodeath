@@ -214,6 +214,33 @@ interface StringEntry {
   finalIndex: number;
 }
 
+// ---- Cross-file decoy pool ----
+//
+// obfuscateMultiple() seeds this before each per-file obfuscate()
+// call so the emitted string array gets padded with entries drawn
+// from the OTHER files' source strings. The decoys are real strings
+// (they look indistinguishable from legitimate entries) but no code
+// in this file references their indices — they sit in the chain-
+// decoded cache and are never read. What the outside world sees:
+// every file in the batch has an array of comparable length and
+// similar character distribution, so you can't tell which file is
+// which by eyeballing the array preamble.
+//
+// The pool is a pre-shuffled list with an optional base size. Each
+// call to getAndClearStringArrayDecoys() returns what was set and
+// resets the state, following the same module-singleton pattern
+// setDonorStatements uses for dead-code donors.
+
+let pendingDecoys: string[] | null = null;
+
+export function setStringArrayDecoys(decoys: string[] | null): void {
+  pendingDecoys = decoys;
+}
+
+export function clearStringArrayDecoys(): void {
+  pendingDecoys = null;
+}
+
 /**
  * Apply string array extraction + rotation to an AST.
  *
@@ -264,14 +291,24 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
     fallback: 'iteration',
   } as any);
 
-  if (stringMap.size === 0) return;
+  // Cross-file normalization decoys (see setStringArrayDecoys at top).
+  // Filter down to strings this file doesn't already have so the real
+  // indices aren't duplicated; the leftover becomes pure padding.
+  const decoyCandidates = pendingDecoys ? pendingDecoys.filter((s) => !stringMap.has(s) && s !== '') : [];
+
+  // If the file has no real strings AND no decoys, no array is needed.
+  if (stringMap.size === 0 && decoyCandidates.length === 0) return;
 
   // ---- Build shuffled array ----
 
   const strings = Array.from(stringMap.keys());
   shuffle(strings);
 
-  // Assign final indices (post-rotation order)
+  // Assign final indices for the REAL strings (post-shuffle order).
+  // Decoys get appended after these and keep their own positions —
+  // real-string indices (which are baked into every accessor call
+  // inserted below) stay stable regardless of how many decoys land at
+  // the tail.
   strings.forEach((s, i) => stringMap.set(s, i));
 
   // ---- Base offset (no rotation — chaining requires sequential order) ----
@@ -283,7 +320,14 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   // stay in its build-time order — rotation would break the chain.
   // The chain itself provides protection: you can't decode entry N
   // without first decoding entries 0 through N-1.
-  const orderedStrings = strings; // shuffled but not rotated
+  //
+  // Decoys are appended AFTER the real strings so every real index
+  // keeps its position. Shuffling the decoys mixes their character-
+  // length distribution along the chain tail instead of all clumping
+  // at one end.
+  const shuffledDecoys = decoyCandidates.slice();
+  shuffle(shuffledDecoys);
+  const orderedStrings = strings.concat(shuffledDecoys);
 
   // ---- Pass 2: Replace string nodes with accessor calls ----
 

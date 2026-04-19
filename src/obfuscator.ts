@@ -28,6 +28,7 @@ import { applyRegexEncoding } from './transforms/regexEncoding';
 import { applyTemplateLiteralFlattening } from './transforms/templateLiteralFlattening';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
+import { setStringArrayDecoys, clearStringArrayDecoys } from './transforms/stringArrayExtraction';
 
 const { minify_sync } = require('terser');
 
@@ -457,6 +458,71 @@ function collectDonorStatements(code: string): any[] {
 const MAX_DONOR_STATEMENTS = 200;
 
 /**
+ * Cap on the cross-file string-decoy pool. The pool is unioned across
+ * every input file, so without a ceiling a 50-file bundle with rich
+ * literal content could push thousands of strings into every other
+ * file's array. 800 strings × 4 hex chars × avg length 10 is ≈ 32KB
+ * of decoy payload per file — enough to normalize the visible
+ * preamble without dominating output size.
+ */
+const MAX_DECOY_POOL = 800;
+
+/**
+ * Walk a file's AST once with @babel/parser and return every string
+ * value that would plausibly land in its string array: source
+ * `StringLiteral` values plus `TemplateElement` cooked values
+ * (templateLiteralFlattening later turns these into StringLiterals).
+ *
+ * Skips shapes `stringArrayExtraction` would exclude anyway — require
+ * arguments, import/export sources, directive prologues, and empty
+ * strings — so the union of these sets across files is a realistic
+ * approximation of the real array contents. The approximation is
+ * coarse (transform-injected strings like antiDebug's "debugger"
+ * payloads aren't counted), but good enough for the decoy set — the
+ * point is to pad each file's visible array, not to exactly match
+ * the post-transform content.
+ */
+function collectExtractableStrings(code: string): Set<string> {
+  const babelParser = require('@babel/parser');
+  let ast: any;
+  try {
+    ast = babelParser.parse(code, {
+      sourceType: 'unambiguous',
+      errorRecovery: true,
+      plugins: [],
+    });
+  } catch {
+    return new Set();
+  }
+  const out = new Set<string>();
+  estraverse.traverse(ast.program, {
+    keys: EXTRA_VISITOR_KEYS,
+    enter(node: any, parent: any) {
+      if (node.type === 'StringLiteral' || (node.type === 'Literal' && typeof node.value === 'string')) {
+        const v = node.value;
+        if (typeof v !== 'string' || v === '') return;
+        // Replicate the minimum exclusions so decoys don't include
+        // import paths or property keys that the real pass wouldn't.
+        if (parent) {
+          if (parent.type === 'CallExpression' && parent.callee && parent.callee.type === 'Identifier' && parent.callee.name === 'require') return;
+          if (parent.type === 'CallExpression' && parent.callee && parent.callee.type === 'Import') return;
+          if (parent.type === 'ImportDeclaration' || parent.type === 'ExportNamedDeclaration' || parent.type === 'ExportAllDeclaration') return;
+          if ((parent.type === 'Property' || parent.type === 'ObjectProperty') && parent.key === node) return;
+          if (parent.type === 'MemberExpression' && parent.property === node && !parent.computed) return;
+          if (parent.type === 'ExpressionStatement' && parent.directive != null) return;
+        }
+        out.add(v);
+      } else if (node.type === 'TemplateElement') {
+        const cooked = node.value && typeof node.value.cooked === 'string' ? node.value.cooked : '';
+        if (cooked) out.add(cooked);
+      }
+    },
+    fallback: 'iteration',
+  } as any);
+  return out;
+}
+
+/**
  * Obfuscate multiple JavaScript files, using code from ALL files as
  * donor material for dead code mutation.
  *
@@ -491,14 +557,220 @@ export function obfuscateMultiple(
     allDonors = sampled;
   }
 
-  // Phase 2: set the shared donor pool and obfuscate each file
+  // Phase 2: cross-file string-array normalization.
+  //
+  // Each file's string array would otherwise be a fingerprint —
+  // different length, different length distribution, depending only
+  // on that file's own literals. A reader looking at a batch can then
+  // tell files apart at a glance. To prevent this we pre-collect a
+  // union of every file's source strings, cap it, and pass each file
+  // the union minus its own so every output ends up with an array of
+  // comparable length and similar character-length distribution.
+  // Decoys are real strings from other files in the batch, so they
+  // look indistinguishable from legitimate entries.
+  const perFileStrings = files.map((f) => collectExtractableStrings(f.code));
+  const unionStrings = new Set<string>();
+  for (const s of perFileStrings) for (const str of s) unionStrings.add(str);
+
+  let decoyPool = Array.from(unionStrings);
+  if (decoyPool.length > MAX_DECOY_POOL) {
+    // Random sample; destructive swap-remove to avoid picking the
+    // same string twice. Caller doesn't see the original pool, so
+    // mutating it in place is fine.
+    const sampled: string[] = [];
+    for (let i = 0; i < MAX_DECOY_POOL && decoyPool.length > 0; i++) {
+      const idx = Math.floor(Math.random() * decoyPool.length);
+      sampled.push(decoyPool[idx]);
+      decoyPool[idx] = decoyPool[decoyPool.length - 1];
+      decoyPool.pop();
+    }
+    decoyPool = sampled;
+  }
+
+  // Phase 3: set the shared donor pool and obfuscate each file with
+  // its file-specific decoy set.
   setDonorStatements(allDonors);
+  let results: { filename: string; code: string }[];
   try {
-    return files.map(file => ({
-      filename: file.filename,
-      code: obfuscate(file.code, options),
-    }));
+    results = files.map((file, i) => {
+      const own = perFileStrings[i];
+      const decoys = decoyPool.filter((s) => !own.has(s));
+      setStringArrayDecoys(decoys);
+      try {
+        return {
+          filename: file.filename,
+          code: obfuscate(file.code, options),
+        };
+      } finally {
+        clearStringArrayDecoys();
+      }
+    });
   } finally {
     clearDonorStatements();
   }
+
+  // Phase 4: post-pass length equalization.
+  //
+  // Pre-pass decoys (Phase 3) normalize the *source-derived* portion
+  // of each file's array, but the random transforms (antiDebug,
+  // tripwires, CFF dead code, opaque predicates, …) inject wildly
+  // varying amounts of additional strings depending on each run's
+  // RNG. Two files with identical sources can still come out with
+  // arrays differing by 50+ entries. The only way to guarantee
+  // visually identical array lengths is to fix it up after the fact.
+  //
+  // We parse each output, find the string array, compute the max
+  // length, and pad every shorter array by appending hex entries
+  // borrowed from siblings — the hex is valid, the same character-
+  // length distribution as the rest of the file's array, and we
+  // also bump the accessor's hardcoded loop bound so the decoder
+  // processes the appended entries (they decode to garbage the
+  // runtime never reads, but the arrayLen-vs-array-length shape
+  // stays consistent for a static inspector).
+  return normalizeStringArrays(results);
+}
+
+// ---- Post-pass string-array length equalization ----
+
+/**
+ * Walk a program body looking for the string array declaration
+ * emitted by `applyStringArrayExtraction` — the first
+ * VariableDeclaration whose declarator initializer is an
+ * ArrayExpression of StringLiterals. Returns both the declarator and
+ * the array node so the caller can mutate in place.
+ */
+function findStringArrayDecl(program: any): { arrayExpr: any } | null {
+  for (const stmt of program.body || []) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const d of stmt.declarations || []) {
+      const init = d && d.init;
+      if (
+        init &&
+        init.type === 'ArrayExpression' &&
+        Array.isArray(init.elements) &&
+        init.elements.length > 0 &&
+        init.elements.every(
+          (e: any) => e && (e.type === 'StringLiteral' || (e.type === 'Literal' && typeof e.value === 'string')),
+        )
+      ) {
+        return { arrayExpr: init };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Find the accessor's outer decode loop — the ForStatement whose
+ * header matches `for (var ci = 0; ci < <N>; ci++)` with a numeric
+ * right-hand side equal to `currentLen`.  The inner character-by-
+ * character loop uses `<v>.length` on its right (not a literal), so
+ * the value-match disambiguates even though both loops share the
+ * same skeleton. Returns the NumericLiteral so the caller can bump
+ * its `.value`.
+ */
+function findAccessorLengthLiteral(program: any, currentLen: number): any | null {
+  let found: any = null;
+  estraverse.traverse(program, {
+    keys: EXTRA_VISITOR_KEYS,
+    enter(node: any) {
+      if (found) return (estraverse as any).VisitorOption.Break;
+      if (node.type !== 'ForStatement') return;
+      if (!node.test || node.test.type !== 'BinaryExpression') return;
+      if (node.test.operator !== '<') return;
+      const right = node.test.right;
+      if (!right) return;
+      if (right.type === 'NumericLiteral' || (right.type === 'Literal' && typeof right.value === 'number')) {
+        if (right.value === currentLen) {
+          found = right;
+          return (estraverse as any).VisitorOption.Break;
+        }
+      }
+    },
+    fallback: 'iteration',
+  } as any);
+  return found;
+}
+
+/**
+ * Equalize every file's string-array length to the longest by
+ * appending hex entries borrowed from siblings. Accessor
+ * `arrayLen` constants are updated in lockstep so the decoder
+ * iterates the full array.
+ *
+ * Appended entries are valid hex drawn from other files' real
+ * arrays — same encoding stride (multiple of 4 chars), same
+ * statistical shape. The decoder will produce garbage strings for
+ * them when the chain decodes, but those cache slots are never
+ * accessed by any code in the file, so the garbage is inert.
+ */
+function normalizeStringArrays(
+  results: { filename: string; code: string }[],
+): { filename: string; code: string }[] {
+  if (results.length < 2) return results;
+
+  // Parse each file, locate its array. Files without an array (code
+  // that was too small to trigger string extraction) are skipped —
+  // we don't retroactively add an array to a file that didn't ship
+  // one.
+  interface FileState {
+    filename: string;
+    ast: any;
+    arrayExpr: any;
+    lenLiteral: any | null;
+    currentLen: number;
+  }
+  const states: FileState[] = [];
+  for (const r of results) {
+    let ast: any;
+    try {
+      ast = recast.parse(r.code, { parser: require('recast/parsers/babel') });
+    } catch {
+      states.push({ filename: r.filename, ast: null, arrayExpr: null, lenLiteral: null, currentLen: 0 });
+      continue;
+    }
+    const found = findStringArrayDecl(ast.program);
+    if (!found) {
+      states.push({ filename: r.filename, ast, arrayExpr: null, lenLiteral: null, currentLen: 0 });
+      continue;
+    }
+    const currentLen = found.arrayExpr.elements.length;
+    const lenLiteral = findAccessorLengthLiteral(ast.program, currentLen);
+    states.push({ filename: r.filename, ast, arrayExpr: found.arrayExpr, lenLiteral, currentLen });
+  }
+
+  // Gather the hex pool: every encoded entry from every file's array,
+  // used as the decoy source. Borrowing from siblings (rather than
+  // generating fresh random hex) preserves the character-length
+  // distribution of real entries.
+  const hexPool: string[] = [];
+  for (const st of states) {
+    if (!st.arrayExpr) continue;
+    for (const e of st.arrayExpr.elements) {
+      if (e && typeof e.value === 'string' && e.value.length > 0) hexPool.push(e.value);
+    }
+  }
+  if (hexPool.length === 0) return results;
+
+  const maxLen = Math.max(...states.map((s) => s.currentLen));
+  if (maxLen === 0) return results;
+
+  const out: { filename: string; code: string }[] = [];
+  for (let i = 0; i < states.length; i++) {
+    const st = states[i];
+    const orig = results[i];
+    if (!st.ast || !st.arrayExpr) { out.push(orig); continue; }
+
+    const need = maxLen - st.currentLen;
+    if (need <= 0) { out.push(orig); continue; }
+
+    for (let k = 0; k < need; k++) {
+      const hex = hexPool[Math.floor(Math.random() * hexPool.length)];
+      st.arrayExpr.elements.push({ type: 'StringLiteral', value: hex });
+    }
+    if (st.lenLiteral) st.lenLiteral.value = maxLen;
+
+    out.push({ filename: st.filename, code: recast.print(st.ast).code });
+  }
+  return out;
 }
