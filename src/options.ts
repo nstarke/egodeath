@@ -9,6 +9,32 @@ export interface ObfuscateOptions {
    * Rough heuristic: 1 token ≈ 4 characters.
    */
   targetTokens: number;
+
+  /**
+   * API surface normalization. When set on `obfuscateMultiple`,
+   * every file in the batch is rewritten so it ends with a shared
+   * `module.exports = { <fixed dispatch key set> }` block. The key
+   * set is identical (byte-identical at the source level) across
+   * every file, the number of slots is fixed, and each file's real
+   * default export lands at exactly one slot — the other slots get
+   * type-uniform dummy functions.
+   *
+   * This defeats "which module is this?" signals at the CommonJS
+   * boundary: a reader comparing two outputs can no longer use the
+   * shape of the export object, the set of exported names, or the
+   * arity/type of exported values to separate "module A" from
+   * "module B" — they both expose the same dispatch surface.
+   *
+   * This breaks original consumers of the module (they must now
+   * look up `require('./x').<dispatch_key>` instead of
+   * `require('./x')`), so it's off by default and intended for
+   * detection-hardening / adversarial-analysis contexts, not
+   * production obfuscation.
+   *
+   * `obfuscate()` (single-file) ignores this flag: without
+   * cross-file coordination, the key set is meaningless.
+   */
+  normalizeExports?: boolean;
 }
 
 export const DEFAULT_OPTIONS: ObfuscateOptions = {

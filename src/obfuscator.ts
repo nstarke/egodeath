@@ -30,6 +30,7 @@ import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } fr
 import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
 import { setStringArrayDecoys, clearStringArrayDecoys } from './transforms/stringArrayExtraction';
 import { buildCrossFilePrelude } from './transforms/crossFileTransplant';
+import { makeDispatchPlan, normalizeFileExports, pickSlotForFile } from './transforms/exportNormalization';
 
 const { minify_sync } = require('terser');
 
@@ -609,6 +610,19 @@ export function obfuscateMultiple(
   // function declarations and reachable-string set — dissolving
   // the "which source did this come from" signal a static reader
   // (human or LLM) could otherwise use.
+  // Optional: API surface normalization (opt-in). When enabled,
+  // every file gets its CommonJS exports rewritten into a shared
+  // dispatch shape — same key set, same number of slots — with the
+  // real default export landing at a per-file slot. The rewrite is
+  // a source-level transform run *before* the rest of the pipeline,
+  // so downstream obfuscation processes the normalized shape
+  // uniformly (renames, property-key-encodes, string-arrayifies)
+  // exactly as it would any other source. The dispatch plan is
+  // generated once here and reused for every file in the batch, so
+  // the key set is byte-identical at the source level across files.
+  const normalizeExports = Boolean((options || {}).normalizeExports);
+  const dispatchPlan = normalizeExports ? makeDispatchPlan() : null;
+
   setDonorStatements(allDonors);
   let results: { filename: string; code: string }[];
   try {
@@ -621,7 +635,15 @@ export function obfuscateMultiple(
           .filter((_, j) => j !== i)
           .map((f) => f.code);
         const prelude = buildCrossFilePrelude(siblingSources);
-        const merged = prelude + file.code;
+        // Apply export normalization to the file's own source
+        // BEFORE merging with the prelude. The prelude is guarded
+        // sibling code that never executes and shouldn't carry the
+        // current file's export surface; only the file's own body
+        // needs its exports rewritten.
+        const ownCode = dispatchPlan
+          ? normalizeFileExports(file.code, dispatchPlan, pickSlotForFile(dispatchPlan, i))
+          : file.code;
+        const merged = prelude + ownCode;
         return {
           filename: file.filename,
           code: obfuscate(merged, options),
