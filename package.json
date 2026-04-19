@@ -9,7 +9,8 @@
     "test": "jest",
     "obfuscate": "node dist/index.js",
     "obfuscate-package": "ts-node --project tools/tsconfig.json tools/obfuscate-package.ts",
-    "benchmark": "ts-node --project tools/tsconfig.json tools/benchmark.ts"
+    "benchmark": "ts-node --project tools/tsconfig.json tools/benchmark.ts",
+    "detect-obfuscation": "ts-node --project tools/tsconfig.json tools/obfuscation-detection-test.ts"
   },
   "author": "",
   "license": "MIT",
