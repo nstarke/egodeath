@@ -25,6 +25,7 @@ import { applyTripwires } from './transforms/tripwires';
 import { applyNoiseInjection } from './transforms/noiseInjection';
 import { applySelfIntegrity } from './transforms/selfIntegrity';
 import { applyRegexEncoding } from './transforms/regexEncoding';
+import { applyTemplateLiteralFlattening } from './transforms/templateLiteralFlattening';
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
 
@@ -241,6 +242,14 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     const count = (recast.print(ast).code.match(/=\s*RegExp\b/g) || []).length;
     process.stderr.write('[after regexEnc] RegExp count: ' + count + '\n');
   }
+
+  // Template literal flattening: rewrite `foo ${x} bar` into
+  // "foo " + x + " bar" so the quasi strings land as plain
+  // StringLiterals that the next pass can pack into the string
+  // array. Without this, template literals' static text survives
+  // verbatim through every obfuscation layer. Must run before
+  // stringArrayExtraction so the emitted literals get collected.
+  applyTemplateLiteralFlattening(ast);
 
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
