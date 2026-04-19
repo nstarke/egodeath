@@ -185,3 +185,39 @@ describe('cross-file dead code mutation', () => {
     expect(results[1].code.length).toBeGreaterThan(0);
   });
 });
+
+// --- Donor pool size regression ---
+
+describe('donor pool rejects oversized statements', () => {
+  // An earlier version of collectDonorStatements used recast.parse and
+  // collected every VariableDeclaration/ExpressionStatement regardless
+  // of subtree size. A single webpack-bundled 3000-node IIFE would end
+  // up in the pool, and generateMutatedCode would deep-clone it on
+  // every dead-case injection. For 8 modest bundles this turned
+  // obfuscateMultiple into a ~60 s operation vs ~0.7 s for the same
+  // files run through obfuscate() individually.
+  //
+  // The fix: (a) parse with @babel/parser (recast is ~10x slower and
+  // we don't need position preservation), (b) reject donors whose
+  // subtrees exceed MAX_DONOR_NODES while continuing traversal so
+  // small statements nested inside a giant IIFE are still reachable.
+  it('obfuscateMultiple completes in bounded time given a pathological giant donor', () => {
+    // Build a file with a massive object literal at top level —
+    // exactly the shape that tanked performance before the fix.
+    const huge: string[] = [];
+    for (let i = 0; i < 600; i++) huge.push(`k${i}:${i}*${i % 7}+${i}`);
+    const files = [
+      { filename: 'huge.js', code: `var payload = {${huge.join(',')}};` },
+      { filename: 'consumer.js', code: 'function run(n){var x = n * 2; var y = x + 10; return y;} module.exports = run;' },
+      { filename: 'another.js', code: 'var a = 1; var b = a + 2; var c = b * 3;' },
+    ];
+    const t = Date.now();
+    const results = obfuscateMultiple(files, { targetTokens: 2000 });
+    const elapsed = Date.now() - t;
+    expect(results.length).toBe(3);
+    // 10 s is already catastrophic; the threshold is intentionally
+    // lax so the test is stable on loaded CI machines, while still
+    // catching the 60 s regression class.
+    expect(elapsed).toBeLessThan(10_000);
+  });
+});

@@ -316,17 +316,70 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   return output;
 }
 
+/** Maximum AST node count a donor statement may have. */
+const MAX_DONOR_NODES = 40;
+
+/**
+ * Cheap size check: count AST descendants up to `limit`. Returns the
+ * count (capped at limit + 1). Used to reject donor statements whose
+ * subtrees are too large to clone cheaply — without this, a single
+ * webpack IIFE ExpressionStatement wrapping 10k nodes would poison
+ * the donor pool and every subsequent `generateMutatedCode` call
+ * would deep-clone it.
+ */
+function countNodesBounded(node: any, limit: number): number {
+  if (!node || typeof node !== 'object') return 0;
+  let count = 1;
+  const stack: any[] = [node];
+  while (stack.length > 0 && count <= limit) {
+    const n = stack.pop();
+    for (const key of Object.keys(n)) {
+      if (key === 'loc' || key === 'start' || key === 'end' ||
+          key === 'extra' || key === 'comments' || key === 'leadingComments' ||
+          key === 'trailingComments' || key === 'innerComments' || key === 'range') {
+        continue;
+      }
+      const v = n[key];
+      if (Array.isArray(v)) {
+        for (const vv of v) {
+          if (vv && typeof vv === 'object') { count++; stack.push(vv); }
+          if (count > limit) return count;
+        }
+      } else if (v && typeof v === 'object') {
+        count++;
+        stack.push(v);
+        if (count > limit) return count;
+      }
+    }
+  }
+  return count;
+}
+
 /**
  * Collect statements from an AST for use as donor material in
  * cross-file dead code mutation. Only collects "simple" statements
- * (variable declarations and expression statements) to keep memory
- * bounded — large compound statements like class bodies or nested
- * functions are skipped since they'd be expensive to clone/mutate.
+ * (variable declarations and expression statements) whose subtrees
+ * stay under `MAX_DONOR_NODES` — generateMutatedCode deep-clones
+ * every selected donor, so a single giant statement (IIFE-wrapped
+ * bundle closure, long object literal, etc.) dominates the per-file
+ * obfuscation cost even when the donor pool is capped at 200.
+ *
+ * Uses @babel/parser directly rather than recast: we only need a
+ * plain AST to read statements out of, and recast's position-
+ * preserving parser is ~10x slower for no benefit here.
  */
 function collectDonorStatements(code: string): any[] {
-  const ast = recast.parse(code, {
-    parser: require('recast/parsers/babel'),
-  });
+  const babelParser = require('@babel/parser');
+  let ast: any;
+  try {
+    ast = babelParser.parse(code, {
+      sourceType: 'unambiguous',
+      errorRecovery: true,
+      plugins: [],
+    });
+  } catch {
+    return [];
+  }
   const donors: any[] = [];
   const SIMPLE_TYPES = new Set([
     'VariableDeclaration',
@@ -337,8 +390,13 @@ function collectDonorStatements(code: string): any[] {
   estraverse.traverse(ast.program, {
     keys: EXTRA_VISITOR_KEYS,
     enter(node: any) {
-      // Collect simple statements from top-level and function bodies
-      if (SIMPLE_TYPES.has(node.type)) {
+      if (!SIMPLE_TYPES.has(node.type)) return;
+      // Reject-but-recurse: countNodesBounded is O(MAX_DONOR_NODES)
+      // so the extra work is small, and by continuing traversal we
+      // still collect small simple statements nested inside giant
+      // IIFEs or assignment expressions — useful donors the
+      // collection would otherwise miss.
+      if (countNodesBounded(node, MAX_DONOR_NODES) <= MAX_DONOR_NODES) {
         donors.push(node);
       }
     },
