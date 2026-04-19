@@ -1,0 +1,129 @@
+egodeath obfuscation-detection evaluation
+  runs:          50
+  model:         gpt-5.4
+  git HEAD:      e8db833db2
+  source-dir:    /Users/nicholasstarke/Documents/git/egodeath/tests (24 .js files)
+  target-tokens: 25,000 (SAME-trial base, DIFFERENT-trial fixed)
+  SAME window:   large (max ≥ 250,000B): delta ∈ [100,000, 250,000]
+                 small (max <  250,000B): delta ≤ 25,000
+  DIFFERENT:     obfuscateMultiple (shared donor pool + normalized string arrays)
+
+  [trial 1/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=72KB/69KB
+  [trial 2/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=51KB/47KB
+  [trial 3/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=88KB/89KB
+  [trial 4/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=22KB/29KB
+  [trial 5/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=31KB/30KB
+  [trial 6/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=35KB/27KB
+  [trial 7/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=74KB/58KB
+  [trial 8/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=35KB/64KB
+  [trial 9/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=104KB/93KB
+  [trial 10/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=68KB/71KB
+  [trial 11/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=62KB/64KB
+  [trial 12/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=45KB/64KB
+  [trial 13/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=40KB/41KB
+  [trial 14/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=32KB/48KB
+  [trial 15/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=73KB/66KB
+  [trial 16/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=39KB/28KB
+  [trial 17/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=75KB/63KB
+  [trial 18/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=271KB/98KB
+  [trial 19/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=45KB/44KB
+  [trial 20/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=44KB/27KB
+  [trial 21/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=46KB/48KB
+  [trial 22/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=61KB/46KB
+  [trial 23/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=44KB/40KB
+  [trial 24/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=32KB/43KB
+  [trial 25/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=64KB/62KB
+  [trial 26/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=55KB/67KB
+  [trial 27/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=27KB/31KB
+  [trial 28/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=96KB/96KB
+  [trial 29/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=27KB/32KB
+  [trial 30/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=40KB/32KB
+  [trial 31/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=43KB/51KB
+  [trial 32/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=28KB/26KB
+  [trial 33/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=46KB/36KB
+  [trial 34/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=31KB/40KB
+  [trial 35/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=SAME [MISS] sizes=43KB/34KB
+  [trial 36/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=94KB/94KB
+  [trial 37/50] obfuscating + querying gpt-5.4... actual=SAME predicted=SAME [OK] sizes=65KB/65KB
+  [trial 38/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=57KB/78KB
+  [trial 39/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=50KB/31KB
+  [trial 40/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=46KB/36KB
+  [trial 41/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=65KB/47KB
+  [trial 42/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=66KB/46KB
+  [trial 43/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=36KB/37KB
+  [trial 44/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=45KB/59KB
+  [trial 45/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=31KB/45KB
+  [trial 46/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=73KB/71KB
+  [trial 47/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=88KB/97KB
+  [trial 48/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=39KB/45KB
+  [trial 49/50] obfuscating + querying gpt-5.4... actual=DIFFERENT predicted=DIFFERENT [OK] sizes=44KB/34KB
+  [trial 50/50] obfuscating + querying gpt-5.4... actual=SAME predicted=DIFFERENT [MISS] sizes=40KB/43KB
+
+========== RESULTS ==========
+  trials:        50
+  errors:        0
+  unknown reply: 0
+  evaluable:     50
+  correct:       24 (48.0%)
+  wrong:         26 (52.0%)
+
+  Confusion matrix (rows = actual, cols = predicted):
+                       pred:SAME   pred:DIFFERENT   pred:UNKNOWN
+    actual SAME            6           19                0
+    actual DIFFERENT       7           18                0
+
+  Per-trial detail:
+    #   actual      predicted    status   sizeA    sizeB    delta    regime  source A → source B
+      1  SAME        DIFFERENT    MISS     72KB    69KB     3KB   small   input.js → input.js
+      2  SAME        DIFFERENT    MISS     51KB    47KB     4KB   small   input6.js → input6.js
+      3  DIFFERENT   DIFFERENT     OK      88KB    89KB     1KB   —       budget_medium.js → input13.js
+      4  SAME        DIFFERENT    MISS     22KB    29KB     7KB   small   input22.js → input22.js
+      5  DIFFERENT   SAME         MISS     31KB    30KB     0KB   —       input12.js → input8.js
+      6  DIFFERENT   DIFFERENT     OK      35KB    27KB     8KB   —       input9.js → input19.js
+      7  SAME        DIFFERENT    MISS     74KB    58KB    16KB   small   input3.js → input3.js
+      8  DIFFERENT   DIFFERENT     OK      35KB    64KB    29KB   —       input10.js → input17.js
+      9  DIFFERENT   SAME         MISS    104KB    93KB    10KB   —       input7.js → budget_medium.js
+     10  SAME        DIFFERENT    MISS     68KB    71KB     3KB   small   input20.js → input20.js
+     11  SAME        DIFFERENT    MISS     62KB    64KB     2KB   small   input15.js → input15.js
+     12  SAME        DIFFERENT    MISS     45KB    64KB    19KB   small   input14.js → input14.js
+     13  DIFFERENT   DIFFERENT     OK      40KB    41KB     1KB   —       input19.js → input3.js
+     14  DIFFERENT   DIFFERENT     OK      32KB    48KB    16KB   —       input4.js → input5.js
+     15  SAME        DIFFERENT    MISS     73KB    66KB     7KB   small   input19.js → input19.js
+     16  DIFFERENT   DIFFERENT     OK      39KB    28KB    12KB   —       input17.js → input12.js
+     17  DIFFERENT   SAME         MISS     75KB    63KB    11KB   —       input23.js → input6.js
+     18  SAME        DIFFERENT    MISS    271KB    98KB   173KB   large   input5.js → input5.js
+     19  SAME        SAME          OK      45KB    44KB     1KB   small   input6.js → input6.js
+     20  DIFFERENT   DIFFERENT     OK      44KB    27KB    17KB   —       input5.js → input2.js
+     21  SAME        DIFFERENT    MISS     46KB    48KB     2KB   small   input22.js → input22.js
+     22  SAME        DIFFERENT    MISS     61KB    46KB    15KB   small   input20.js → input20.js
+     23  SAME        SAME          OK      44KB    40KB     4KB   small   input2.js → input2.js
+     24  DIFFERENT   DIFFERENT     OK      32KB    43KB    11KB   —       input15.js → input2.js
+     25  DIFFERENT   SAME         MISS     64KB    62KB     2KB   —       input4.js → input18.js
+     26  SAME        SAME          OK      55KB    67KB    12KB   small   input3.js → input3.js
+     27  DIFFERENT   SAME         MISS     27KB    31KB     5KB   —       input22.js → input15.js
+     28  DIFFERENT   SAME         MISS     96KB    96KB     1KB   —       budget_medium.js → input11.js
+     29  DIFFERENT   DIFFERENT     OK      27KB    32KB     4KB   —       input22.js → input23.js
+     30  DIFFERENT   DIFFERENT     OK      40KB    32KB     8KB   —       input2.js → input13.js
+     31  SAME        SAME          OK      43KB    51KB     8KB   small   input18.js → input18.js
+     32  DIFFERENT   DIFFERENT     OK      28KB    26KB     2KB   —       input2.js → input11.js
+     33  SAME        SAME          OK      46KB    36KB     9KB   small   input.js → input.js
+     34  SAME        DIFFERENT    MISS     31KB    40KB     9KB   small   input6.js → input6.js
+     35  DIFFERENT   SAME         MISS     43KB    34KB     9KB   —       input5.js → input11.js
+     36  DIFFERENT   DIFFERENT     OK      94KB    94KB     1KB   —       budget_medium.js → input6.js
+     37  SAME        SAME          OK      65KB    65KB     0KB   small   input13.js → input13.js
+     38  SAME        DIFFERENT    MISS     57KB    78KB    21KB   small   input13.js → input13.js
+     39  DIFFERENT   DIFFERENT     OK      50KB    31KB    19KB   —       input5.js → input8.js
+     40  DIFFERENT   DIFFERENT     OK      46KB    36KB    10KB   —       input11.js → input16.js
+     41  SAME        DIFFERENT    MISS     65KB    47KB    18KB   small   input23.js → input23.js
+     42  SAME        DIFFERENT    MISS     66KB    46KB    20KB   small   input12.js → input12.js
+     43  DIFFERENT   DIFFERENT     OK      36KB    37KB     0KB   —       input21.js → input4.js
+     44  SAME        DIFFERENT    MISS     45KB    59KB    14KB   small   input17.js → input17.js
+     45  SAME        DIFFERENT    MISS     31KB    45KB    14KB   small   input20.js → input20.js
+     46  SAME        DIFFERENT    MISS     73KB    71KB     2KB   small   input10.js → input10.js
+     47  DIFFERENT   DIFFERENT     OK      88KB    97KB     9KB   —       input10.js → budget_medium.js
+     48  DIFFERENT   DIFFERENT     OK      39KB    45KB     6KB   —       input10.js → input14.js
+     49  DIFFERENT   DIFFERENT     OK      44KB    34KB    10KB   —       input.js → input23.js
+     50  SAME        DIFFERENT    MISS     40KB    43KB     3KB   small   input3.js → input3.js
+
+  JSON report written: logs/detect_2026-04-19_16-09-41.json
+  TXT  report written: logs/detect_2026-04-19_16-09-41.txt
