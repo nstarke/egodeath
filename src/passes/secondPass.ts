@@ -204,7 +204,17 @@ export const secondPassHandlers: PassHandlerMap = {
     return node;
   },
 
-  SwitchCase(node) { return node; },
+  SwitchCase(node) {
+    // Rename the case-test expression when it's a bare identifier.
+    // `case FOO:` in the source is a normal reference that must pick
+    // up the same renamed name as its declaration; without this,
+    // webpack-bundled React's `case REACT_ELEMENT_TYPE:` labels
+    // survive as unrenamed free variables while the declaration was
+    // renamed, producing `ReferenceError: REACT_ELEMENT_TYPE is not
+    // defined` at runtime.
+    if (node.test) substitute(node.test);
+    return node;
+  },
 
   SwitchStatement(node) {
     substitute(node.discriminant);

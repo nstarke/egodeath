@@ -38,6 +38,10 @@ const ALL_PACKAGES = [
   'uuid', 'semver', 'minimist', 'lodash',
   'chalk', 'ms', 'qs', 'classnames', 'moment', 'commander',
   'axios', 'express',
+  // UI frameworks. Bundled headless and exercised via their
+  // DOM-agnostic APIs (createElement trees, reactivity graphs,
+  // module/DI registration).
+  'react', 'vue', 'angular',
 ];
 
 interface CliOptions {
@@ -183,6 +187,12 @@ function ensureWorkspace(
   const pkgJsonPath = path.join(benchmarkDir, 'package.json');
   const deps: Record<string, string> = {};
   for (const p of packages) deps[p] = 'latest';
+  // angular@1.x self-installs onto window at load time and reads DOM
+  // interfaces (Node, Element, HTMLElement, anchor.hostname) while
+  // building its jqLite helpers. A hand-rolled shim is fine for the
+  // interface constructors but doesn't parse URLs — jsdom is the
+  // cheapest way to get a real URL parser + full DOM shape.
+  if (packages.includes('angular')) deps['jsdom'] = 'latest';
 
   const existing = fs.existsSync(pkgJsonPath)
     ? JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
@@ -222,15 +232,134 @@ function ensureWorkspace(
 // ---------------------------------------------------------------------------
 
 /**
+ * Browser-global shim inlined into the smoke-test child's `-e` script.
+ * Must match installGlobalsFor() in benchmark-runner.js. Kept as a
+ * single literal string so the child doesn't need file I/O before
+ * loading the bundle.
+ *
+ * angular@1.x's entry is a self-installing IIFE that reads
+ * window/document unconditionally — requiring the bundle in a plain
+ * Node process throws `window is not defined` before any obfuscator
+ * code has a chance to run. The shim gives angular just enough of a
+ * "browser" to finish bootstrapping; the obfuscated code we actually
+ * want to test then gets a chance to execute and surface real failures.
+ */
+/**
+ * Shim loaded into the smoke-test child for packages that need a
+ * browser-ish global environment. Mirrors installGlobalsFor() in
+ * benchmark-runner.js — kept in sync so any smoke-test failures
+ * reflect real bundle issues, not divergent shim behaviour.
+ *
+ * The shim prefers jsdom (installed by ensureWorkspace when angular
+ * is in the package set) because angular's bootstrap parses URLs via
+ * `document.createElement("a").hostname`, which a hand-rolled stub
+ * can't provide. It falls back to minimal prototype stubs when jsdom
+ * isn't available.
+ */
+/**
+ * angular@1.x's webpack bundle has a cross-module free-variable
+ * reference that the obfuscator mishandles:
+ *
+ *   // module 0 (angular/index.js)
+ *   module.exports = angular;         // bare identifier, expected global
+ *
+ *   // module 1 (angular/angular.js IIFE)
+ *   var angular = window.angular || (window.angular = {});
+ *
+ * Both `angular` identifiers get catalogued under a single rename by
+ * firstPass (the obfuscator renames by string, not scope), so after
+ * obfuscation module 0's reference points at module 1's local —
+ * which isn't visible outside its IIFE and isn't bound on globalThis.
+ * Runtime throws `ReferenceError: <renamed> is not defined`.
+ *
+ * The IIFE's other side effect — `window.angular = angular` — DOES
+ * preserve the populated lib object on the DOM window. Property names
+ * aren't renamed, so `window.angular` still refers to the lib at
+ * runtime. Rewriting module 0's free-var reference to read from
+ * `window.angular` makes the bundle self-consistent without touching
+ * the obfuscator's renaming logic, which would require proper scope
+ * analysis to fix cleanly.
+ */
+function patchAngularCrossModuleRef(code: string): string {
+  const m = code.match(/([^=,;\s()[\]{}<>!&|?:+\-*\/%^~"`]+)=window\.angular\|\|\(window\.angular=\{\}\)/);
+  if (!m) return code;
+  const renamedName = m[1];
+  const escaped = renamedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The renamed identifier is a unicode sequence, so `\b` is unreliable
+  // (`\b` only recognises [A-Za-z0-9_] as word chars). Anchor on a
+  // trailing punctuator instead — module 0's use site is always
+  // followed by `}` (end of the arrow-function body).
+  const replaceRe = new RegExp(`module\\.exports\\s*=\\s*${escaped}(?=[\\s,;)}])`, 'g');
+  return code.replace(replaceRe, 'module.exports=window.angular');
+}
+
+function angularShimScript(benchRoot: string): string {
+  const jsdomPath = path.join(benchRoot, 'node_modules', 'jsdom');
+  return `
+    var JSDOM;
+    try { JSDOM = require(${JSON.stringify(jsdomPath)}).JSDOM; } catch (_) { JSDOM = null; }
+    if (JSDOM) {
+      var dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {url:'http://localhost/'});
+      var w = dom.window;
+      var forceDefine = function(n, v){ Object.defineProperty(global, n, {value: v, configurable: true, writable: true}); };
+      forceDefine('window', w);
+      forceDefine('document', w.document);
+      forceDefine('navigator', w.navigator);
+      forceDefine('location', w.location);
+      forceDefine('Node', w.Node);
+      forceDefine('Element', w.Element);
+      forceDefine('HTMLElement', w.HTMLElement);
+      forceDefine('Event', w.Event);
+      forceDefine('getComputedStyle', w.getComputedStyle.bind(w));
+      Object.defineProperty(global, 'angular', {
+        configurable: true,
+        get: function(){ return w.angular; },
+        set: function(v){ w.angular = v; },
+      });
+    } else {
+      function NodeStub(){} NodeStub.prototype = {nodeName:'STUB', nodeType:1,
+        contains:function(){return false;},
+        appendChild:function(c){return c;}, removeChild:function(c){return c;}};
+      function ElementStub(){} ElementStub.prototype = Object.create(NodeStub.prototype);
+      function HTMLElementStub(){} HTMLElementStub.prototype = Object.create(ElementStub.prototype);
+      if (!global.window) global.window = global;
+      if (!global.Node) global.Node = NodeStub;
+      if (!global.Element) global.Element = ElementStub;
+      if (!global.HTMLElement) global.HTMLElement = HTMLElementStub;
+      if (!global.document) {
+        var stub = {nodeName:'STUB', nodeType:1, children:[], childNodes:[],
+          setAttribute:function(){}, getAttribute:function(){return null;},
+          addEventListener:function(){}, removeEventListener:function(){},
+          style:{}, classList:{add:function(){},remove:function(){},toggle:function(){}},
+          querySelector:function(){return null;}, querySelectorAll:function(){return [];}};
+        global.document = Object.assign({}, stub, {
+          documentElement: Object.assign({}, stub, {nodeName:'HTML'}),
+          head: Object.assign({}, stub, {nodeName:'HEAD'}),
+          body: Object.assign({}, stub, {nodeName:'BODY'}),
+          createElement:function(){return Object.assign({}, stub);},
+          createTextNode:function(t){return {nodeType:3, nodeValue:String(t)};},
+          getElementById:function(){return null;},
+          querySelector:function(){return null;}, querySelectorAll:function(){return [];},
+          readyState:'complete',
+        });
+      }
+      if (!global.navigator) global.navigator = {userAgent:'Node.js'};
+      if (!global.location) global.location = {href:'http://localhost/'};
+    }
+  `;
+}
+
+/**
  * Spawn a tiny child that just `require()`s the bundle. Returns null on
  * success, or the tail of node's stderr on failure. Used to detect the
  * occasional identifier-collision flake in the obfuscator's random namer
  * before we waste time running a full workload against a broken bundle.
  */
-function smokeTestBundle(bundlePath: string): string | null {
+function smokeTestBundle(bundlePath: string, pkg?: string, benchRoot?: string): string | null {
+  const shim = pkg === 'angular' && benchRoot ? angularShimScript(benchRoot) : '';
   const result = spawnSync(
     'node',
-    ['-e', `require(${JSON.stringify(bundlePath)}); process.exit(0);`],
+    ['-e', `${shim}require(${JSON.stringify(bundlePath)}); process.exit(0);`],
     { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }
   );
   if (result.status === 0) return null;
@@ -260,7 +389,9 @@ function obfuscateBundle(
   origPath: string,
   obfPath: string,
   targetTokens: number,
-  maxAttempts = 5
+  maxAttempts = 5,
+  pkg?: string,
+  benchRoot?: string
 ): { origBytes: number; obfBytes: number; elapsedMs: number; attempts: number } {
   const orig = fs.readFileSync(origPath, 'utf-8');
   fs.mkdirSync(path.dirname(obfPath), { recursive: true });
@@ -275,9 +406,10 @@ function obfuscateBundle(
 
     // Strip console stubs — same rationale as tools/obfuscate-package.ts.
     out = out.replace(/console\.\w+\s*=\s*function\s*\(\)\s*\{\s*\}\s*;?\n?/g, '');
+    if (pkg === 'angular') out = patchAngularCrossModuleRef(out);
     fs.writeFileSync(obfPath, out, 'utf-8');
 
-    const err = smokeTestBundle(obfPath);
+    const err = smokeTestBundle(obfPath, pkg, benchRoot);
     if (err === null) {
       return {
         origBytes: Buffer.byteLength(orig, 'utf-8'),
@@ -524,7 +656,7 @@ function main(): void {
         result.obfuscated = true;
       } else {
         console.log(`    obfuscating (target-tokens=${opts.targetTokens.toLocaleString()})...`);
-        const { obfBytes, elapsedMs, attempts } = obfuscateBundle(origPath, obfPath, opts.targetTokens);
+        const { obfBytes, elapsedMs, attempts } = obfuscateBundle(origPath, obfPath, opts.targetTokens, 5, pkg, benchmarkDir);
         result.obfBytes = obfBytes;
         result.obfuscateElapsedMs = elapsedMs;
         result.obfuscated = true;

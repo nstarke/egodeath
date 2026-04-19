@@ -320,6 +320,136 @@ const workloads = {
     },
   },
 
+  react: {
+    description: 'build + traverse createElement trees',
+    defaultIterations: 20000,
+    setup: (mod) => {
+      // Handle both CJS (mod === React) and ESM default-export shapes.
+      const React = mod.default || mod;
+      if (!React || typeof React.createElement !== 'function') {
+        throw new Error('React.createElement not found on module export');
+      }
+      return { React };
+    },
+    step: (mod, state, i) => {
+      const R = state.React;
+      // Build a medium-depth tree: realistic for a list item with
+      // nested content. Children.forEach walks the flattened child
+      // array; isValidElement and cloneElement exercise the elem
+      // shape validation + spread paths.
+      const tree = R.createElement('div',
+        { id: 'root-' + (i % 100), className: 'card', 'data-i': i },
+        R.createElement('h1', null, 'title ', i),
+        R.createElement('ul', { role: 'list' },
+          R.createElement('li', { key: 'a' }, 'alpha'),
+          R.createElement('li', { key: 'b' }, 'beta'),
+          R.createElement('li', { key: 'c' }, 'gamma'),
+        ),
+        R.createElement(R.Fragment, null,
+          R.createElement('span', null, 'f1'),
+          R.createElement('span', null, 'f2'),
+        ),
+      );
+      let valid = 0;
+      R.Children.forEach(tree.props.children, (child) => {
+        if (R.isValidElement(child)) valid++;
+        if (R.isValidElement(child) && child.props.children) {
+          R.Children.forEach(child.props.children, (c) => {
+            if (R.isValidElement(c)) valid++;
+          });
+        }
+      });
+      const mapped = R.Children.map(tree.props.children, (c) => c);
+      const cloned = R.cloneElement(tree, { 'data-cloned': true });
+      return valid + (mapped ? mapped.length : 0) + (cloned ? 1 : 0);
+    },
+  },
+
+  vue: {
+    description: 'reactive() + ref() + computed() + watchEffect()',
+    defaultIterations: 5000,
+    setup: (mod) => {
+      // Vue 3's package exports reactivity primitives at the top level.
+      const Vue = mod.default || mod;
+      if (!Vue || typeof Vue.reactive !== 'function') {
+        throw new Error('Vue 3 reactive API not found on module export');
+      }
+      return { Vue };
+    },
+    step: (mod, state, i) => {
+      const { reactive, ref, computed, watchEffect, effectScope } = state.Vue;
+      // Real-world-ish: scoped reactivity graph with a computed that
+      // depends on both a reactive object and a ref, plus a watchEffect
+      // that re-runs on mutation. effectScope.stop() cleans up so each
+      // iteration starts fresh and we don't leak dependencies.
+      const scope = effectScope();
+      let out = 0;
+      scope.run(() => {
+        const state = reactive({ count: i, items: [1, 2, 3, 4, 5] });
+        const label = ref('item-' + (i % 10));
+        const total = computed(() =>
+          state.items.reduce((a, b) => a + b, 0) + state.count);
+        let ticks = 0;
+        watchEffect(() => {
+          out = total.value ^ label.value.length;
+          ticks++;
+        });
+        state.count = i + 1;
+        state.items.push(i & 0xff);
+        label.value = 'post-' + i;
+        out ^= ticks;
+      });
+      scope.stop();
+      return out;
+    },
+  },
+
+  angular: {
+    description: 'module/controller/service registration + utilities',
+    defaultIterations: 500,
+    setup: (mod) => {
+      // angular@1.x exports its global after the IIFE self-installs
+      // onto window.angular — the pre-require shim in main() sets up
+      // window/document so the IIFE doesn't throw. Some builds return
+      // the namespace directly, others assign to the global.
+      const angular = mod.default || mod || global.angular;
+      if (!angular || typeof angular.module !== 'function') {
+        throw new Error('angular.module not found on module export');
+      }
+      return { angular };
+    },
+    step: (mod, state, i) => {
+      const ng = state.angular;
+      // A fresh module per iteration exercises angular's internal
+      // module registry + provider wiring. These are the hot paths
+      // most real apps hit once at bootstrap but we repeat for timing.
+      const modName = 'bench-' + i;
+      const m = ng.module(modName, []);
+      m.controller('BenchCtrl', function ($scope) {
+        $scope.x = i;
+        $scope.greet = function (n) { return 'hi ' + n; };
+      });
+      m.service('benchSvc', function () {
+        this.square = function (n) { return n * n; };
+      });
+      m.factory('benchFactory', function () {
+        return { tag: 'F', id: i };
+      });
+      m.directive('benchDir', function () {
+        return { restrict: 'E', template: '<span></span>' };
+      });
+      m.filter('reverseStr', function () {
+        return function (s) { return String(s).split('').reverse().join(''); };
+      });
+      // Utility functions — these don't need DOM and are heavily used
+      // across real apps (deep compare, deep copy, object merge).
+      const merged = ng.extend({}, { a: 1 }, { b: 2 }, { c: i });
+      const copied = ng.copy({ n: i, arr: [1, 2, 3], nested: { v: i } });
+      const eq = ng.equals(merged, { a: 1, b: 2, c: i });
+      return (eq ? 1 : 0) + Object.keys(copied).length + Object.keys(merged).length;
+    },
+  },
+
   commander: {
     description: 'parse CLI argv through a small program',
     defaultIterations: 2000,
@@ -364,6 +494,137 @@ const workloads = {
 // Main
 // ---------------------------------------------------------------------------
 
+/**
+ * Install the minimum browser-global shims a bundle needs before its
+ * top-level code runs. Most packages load cleanly under `target: "node"`,
+ * but angular@1.x's entry is an IIFE that reads window/document
+ * unconditionally to self-install onto `window.angular`. Running
+ * bare in Node throws `ReferenceError: window is not defined` before
+ * we ever reach the workload. A minimal shim is enough — we are not
+ * exercising DOM APIs, only letting the bootstrap finish.
+ */
+function installGlobalsFor(pkg) {
+  if (pkg !== 'angular') return;
+
+  // angular@1.x self-installs onto window at load time and walks the
+  // DOM interface constructors (Node, Element, HTMLElement) while
+  // building its jqLite helpers; it also parses URLs via
+  // `document.createElement("a").hostname`. jsdom provides a real
+  // enough DOM that the bootstrap finishes without per-call shimming.
+  //
+  // We pull jsdom from .benchmark/node_modules — ensureWorkspace()
+  // adds it to deps whenever 'angular' is in the package set.
+  let JSDOM;
+  try {
+    // Resolve from the benchmark workspace, which is this file's
+    // grandparent (.benchmark/bundles/<pkg>/bundle.obf.js is the
+    // caller-supplied path, but jsdom is always at
+    // <repoRoot>/.benchmark/node_modules/jsdom).
+    const path = require('path');
+    const benchRoot = path.resolve(__dirname, '..', '.benchmark');
+    JSDOM = require(path.join(benchRoot, 'node_modules', 'jsdom')).JSDOM;
+  } catch (_) {
+    // jsdom missing — fall through to the minimal shim below. Works
+    // far enough for simple module registration but will fail on
+    // anything that parses URLs or walks the real DOM.
+    JSDOM = null;
+  }
+
+  if (JSDOM) {
+    const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+      url: 'http://localhost/',
+    });
+    const w = dom.window;
+    // Node 21+ defines a read-only `navigator` global; assigning directly
+    // throws. Use defineProperty with configurable:true so the jsdom
+    // shim cleanly overrides whatever Node ships by default.
+    const forceDefine = (name, value) => {
+      Object.defineProperty(global, name, { value, configurable: true, writable: true });
+    };
+    forceDefine('window', w);
+    forceDefine('document', w.document);
+    forceDefine('navigator', w.navigator);
+    forceDefine('location', w.location);
+    forceDefine('Node', w.Node);
+    forceDefine('Element', w.Element);
+    forceDefine('HTMLElement', w.HTMLElement);
+    forceDefine('Event', w.Event);
+    forceDefine('getComputedStyle', w.getComputedStyle.bind(w));
+    // angular 1.x's webpack entry (index.js) runs the IIFE that sets
+    // `window.angular = …` and then does `module.exports = angular`
+    // against the bare identifier. In a real browser `window === global`
+    // so that free-var lookup just works; in Node `global !== jsdom
+    // window`, so the bare `angular` resolves against Node's global
+    // and misses. A getter on global proxies the lookup back to the
+    // window object set by the IIFE, keeping module.exports wired up
+    // without reaching inside the bundle.
+    Object.defineProperty(global, 'angular', {
+      configurable: true,
+      get: function () { return w.angular; },
+      set: function (v) { w.angular = v; },
+    });
+    return;
+  }
+
+  // Fallback: hand-rolled DOM stubs. Good enough for angular's first
+  // few hundred lines of bootstrap, not good enough for URL parsing.
+  function NodeStub() {}
+  NodeStub.prototype = {
+    nodeName: 'STUB', nodeType: 1,
+    contains: function () { return false; },
+    appendChild: function (c) { return c; },
+    removeChild: function (c) { return c; },
+    insertBefore: function (c) { return c; },
+  };
+  function ElementStub() {}
+  ElementStub.prototype = Object.create(NodeStub.prototype);
+  function HTMLElementStub() {}
+  HTMLElementStub.prototype = Object.create(ElementStub.prototype);
+
+  if (!global.window) global.window = global;
+  if (!global.Node) global.Node = NodeStub;
+  if (!global.Element) global.Element = ElementStub;
+  if (!global.HTMLElement) global.HTMLElement = HTMLElementStub;
+  if (!global.window.Node) global.window.Node = NodeStub;
+  if (!global.window.Element) global.window.Element = ElementStub;
+  if (!global.window.HTMLElement) global.window.HTMLElement = HTMLElementStub;
+
+  if (!global.document) {
+    const makeNode = () => {
+      const n = new NodeStub();
+      n.children = [];
+      n.childNodes = [];
+      n.setAttribute = () => {};
+      n.getAttribute = () => null;
+      n.addEventListener = () => {};
+      n.removeEventListener = () => {};
+      n.style = {};
+      n.classList = { add: () => {}, remove: () => {}, toggle: () => {} };
+      n.querySelector = () => null;
+      n.querySelectorAll = () => [];
+      return n;
+    };
+    global.document = Object.assign(makeNode(), {
+      documentElement: Object.assign(makeNode(), { nodeName: 'HTML' }),
+      head: Object.assign(makeNode(), { nodeName: 'HEAD' }),
+      body: Object.assign(makeNode(), { nodeName: 'BODY' }),
+      createElement: () => makeNode(),
+      createTextNode: (t) => ({ nodeType: 3, nodeValue: String(t) }),
+      createDocumentFragment: () => Object.assign(makeNode(), { nodeName: '#document-fragment' }),
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      readyState: 'complete',
+    });
+  }
+  if (!global.navigator) {
+    global.navigator = { userAgent: 'Node.js benchmark harness' };
+  }
+  if (!global.location) {
+    global.location = { href: 'http://localhost/', protocol: 'http:', host: 'localhost' };
+  }
+}
+
 function main() {
   const [bundlePathArg, pkg, iterationsArg, warmupArg] = process.argv.slice(2);
   if (!bundlePathArg || !pkg) {
@@ -376,6 +637,8 @@ function main() {
   const bundlePath = path.resolve(bundlePathArg);
   const iterations = Number(iterationsArg) || workload.defaultIterations;
   const warmup = Number(warmupArg) || Math.max(10, Math.floor(iterations / 20));
+
+  installGlobalsFor(pkg);
 
   let mod;
   let loadNs;
