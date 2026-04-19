@@ -5,3 +5,4 @@ dist-tools
 .tmp-packages
 .benchmark
 .claude
+openai.txt
