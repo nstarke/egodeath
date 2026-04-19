@@ -2,7 +2,12 @@ import * as recast from 'recast';
 import * as estraverse from 'estraverse';
 import { ASTNode, PassHandlerMap } from './types';
 import { resetGlobals, resetWindowProps } from './globals';
-import { resetIssuedNames } from './random';
+import {
+  resetIssuedNames,
+  generateSharedNamePool,
+  setSharedNamePool,
+  clearSharedNamePool,
+} from './random';
 import { resetCapturedGlobals, flushCapturedGlobals } from './capturedGlobals';
 import { buildConsoleKeywords } from './keywords';
 import { firstPassHandlers } from './passes/firstPass';
@@ -460,6 +465,15 @@ function collectDonorStatements(code: string): any[] {
 const MAX_DONOR_STATEMENTS = 200;
 
 /**
+ * Size of the shared identifier pool when `shareIdentifiers` is on.
+ * A single obfuscate() run over a modest input issues a few hundred
+ * to a few thousand `gen()` calls across renamer + transforms. 30k
+ * covers files well into the tens-of-KB raw-source range before
+ * the fallback-to-random path kicks in for the tail.
+ */
+const SHARED_POOL_SIZE = 30_000;
+
+/**
  * Cap on the cross-file string-decoy pool. The pool is unioned across
  * every input file, so without a ceiling a 50-file bundle with rich
  * literal content could push thousands of strings into every other
@@ -623,6 +637,19 @@ export function obfuscateMultiple(
   const normalizeExports = Boolean((options || {}).normalizeExports);
   const dispatchPlan = normalizeExports ? makeDispatchPlan() : null;
 
+  // Optional: identifier-pool sharing. When enabled, generate a
+  // single pool of random identifiers up front and reinstall it
+  // (resetting the draw index) before each file's obfuscate() call.
+  // The Nth gen() call in every file then returns the same name,
+  // so renamed identifiers at matching positions collide across
+  // siblings. Pool size is a generous upper bound on the number of
+  // gen() calls a single file makes — an obfuscate() run over a
+  // ~100KB input typically issues 1-3k names across all transforms;
+  // 30k covers very large inputs, with fresh-random fallback for
+  // anything that exhausts it.
+  const shareIdentifiers = Boolean((options || {}).shareIdentifiers);
+  const sharedPool = shareIdentifiers ? generateSharedNamePool(SHARED_POOL_SIZE) : null;
+
   setDonorStatements(allDonors);
   let results: { filename: string; code: string }[];
   try {
@@ -630,6 +657,12 @@ export function obfuscateMultiple(
       const own = perFileStrings[i];
       const decoys = decoyPool.filter((s) => !own.has(s));
       setStringArrayDecoys(decoys);
+      // Reinstall the pool before EACH file's obfuscate() call so
+      // the draw index is 0 and every file walks the same sequence
+      // from the start. Done inside the loop (not once outside) so
+      // the finally in the outer try still clears the pool even if
+      // this file's obfuscate() throws mid-pass.
+      if (sharedPool) setSharedNamePool(sharedPool);
       try {
         const siblingSources = files
           .filter((_, j) => j !== i)
@@ -654,6 +687,10 @@ export function obfuscateMultiple(
     });
   } finally {
     clearDonorStatements();
+    // Always clear the pool after the batch — leaving it installed
+    // would cause the NEXT obfuscate() call from anywhere in the
+    // process to keep drawing from this batch's pool.
+    if (sharedPool) clearSharedNamePool();
   }
 
   // Phase 4: post-pass length equalization.

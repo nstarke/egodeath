@@ -60,6 +60,95 @@ export function mkStr(): string {
 const issuedNames = new Set<string>();
 
 /**
+ * Shared identifier pool for cross-file name sharing. When installed
+ * via `setSharedNamePool()`, `gen()` draws from `sharedPool[
+ * sharedPoolIndex++]` in order rather than rolling a fresh random
+ * name. Two files processed through the same pool, with the index
+ * reset to zero before each file, get the same identifier at every
+ * matching `gen()` call position — so their surface-level token
+ * streams collide at matching positions and look like one source
+ * twice to a static reader.
+ *
+ * The pool entries are themselves drawn from `mkStr()` so they're
+ * indistinguishable from regular random identifiers in shape; the
+ * only difference is that the SAME entries appear in multiple files.
+ *
+ * When the pool is exhausted during a single file's pass (file had
+ * more `gen()` calls than the pool has entries), `gen()` falls back
+ * to fresh random generation for the remainder. This is a soft
+ * degrade: the collision signal applies to the first N names and
+ * tails off beyond. Callers should size the pool generously — the
+ * default used by `obfuscateMultiple` is meant to cover pretty big
+ * files without hitting the tail.
+ */
+let sharedPool: string[] | null = null;
+let sharedPoolIndex = 0;
+
+/**
+ * Install a shared pool of names. `gen()` will return entries in
+ * order for the rest of this obfuscate() call (or until cleared).
+ * Resets the draw index to 0 so each file processed in a batch
+ * starts from the same position — which is what makes position-N
+ * names collide across files.
+ *
+ * Callers must `clearSharedNamePool()` when the batch finishes, or
+ * subsequent (unrelated) `obfuscate()` calls will keep drawing from
+ * the pool and produce non-random names across the rest of the
+ * process's life. `obfuscateMultiple` wraps set/clear in a
+ * `try/finally`.
+ */
+export function setSharedNamePool(pool: string[]): void {
+  sharedPool = pool;
+  sharedPoolIndex = 0;
+}
+
+/**
+ * Revert to fresh-random-per-call `gen()` behavior.
+ */
+export function clearSharedNamePool(): void {
+  sharedPool = null;
+  sharedPoolIndex = 0;
+}
+
+/**
+ * Build a pool of `size` unique Unicode identifier names. Used by
+ * `obfuscateMultiple` once per batch; the same returned array is
+ * then reinstalled before each file so every file's `gen()` sequence
+ * starts from index 0 on the same pool.
+ *
+ * Uniqueness is enforced during construction — the returned array
+ * has no duplicates, so a file drawing from it can never produce an
+ * in-file collision via the shared path (the fallback path at
+ * exhaustion still guards against collisions via `issuedNames`).
+ */
+export function generateSharedNamePool(size: number): string[] {
+  const seen = new Set<string>();
+  const pool: string[] = [];
+  // Retry cap per slot: mkStr() occasionally produces a string
+  // isValidVarName rejects (unicode quirks) or a duplicate. A cap
+  // of 32 per slot is beyond any realistic failure rate and keeps a
+  // pathological input from hanging.
+  for (let i = 0; i < size; i++) {
+    let filled = false;
+    for (let retry = 0; retry < 32; retry++) {
+      const name = mkStr();
+      if (!isVarName(name)) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      pool.push(name);
+      filled = true;
+      break;
+    }
+    if (!filled) {
+      // Pool is shorter than requested — callers handle this
+      // gracefully (fresh random fallback in `gen()`).
+      break;
+    }
+  }
+  return pool;
+}
+
+/**
  * Maximum gen() rerolls before we give up and append a numeric suffix.
  * The unicode name space is astronomical, so in practice we'll never hit
  * this — the cap exists only to make a bug produce a bad name instead of
@@ -80,8 +169,27 @@ export function resetIssuedNames(): void {
  * Names are 6-16 code points long, drawn from dense Unicode ranges that are
  * valid JavaScript identifiers. Uniqueness is guaranteed within a single
  * obfuscate() call by tracking every issued name.
+ *
+ * When a shared pool has been installed via `setSharedNamePool()`,
+ * we draw the next entry from the pool instead of rolling a fresh
+ * random name — this makes matching-position calls across sibling
+ * files return the same identifier. Pool entries that happen to
+ * collide with an already-issued name (unlikely: pool entries are
+ * unique, and `resetIssuedNames` clears between files) are skipped.
+ * On pool exhaustion we fall through to fresh random generation.
  */
 export function gen(): string {
+  if (sharedPool !== null) {
+    while (sharedPoolIndex < sharedPool.length) {
+      const name = sharedPool[sharedPoolIndex++];
+      if (!issuedNames.has(name)) {
+        issuedNames.add(name);
+        return name;
+      }
+    }
+    // Fell through — pool exhausted. Continue to random generation
+    // below so the file still gets every rename target it needs.
+  }
   for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
     let name = mkStr();
     while (!isVarName(name)) name = mkStr();

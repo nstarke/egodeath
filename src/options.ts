@@ -35,6 +35,28 @@ export interface ObfuscateOptions {
    * cross-file coordination, the key set is meaningless.
    */
   normalizeExports?: boolean;
+
+  /**
+   * Identifier-pool sharing. When set on `obfuscateMultiple`, a
+   * single pool of random Unicode identifiers is generated once per
+   * batch and installed before each file's obfuscation pass. Every
+   * file draws names from the pool in order, with the index reset
+   * between files, so the Nth `gen()` call in file A returns the
+   * same identifier as the Nth `gen()` call in file B.
+   *
+   * A reader scanning the final outputs sees overlapping identifier
+   * token sets across sibling files — the same surface signal
+   * they'd see from a single source obfuscated twice. Combined
+   * with cross-file transplants and export normalization, this
+   * makes "is this two different modules?" hard to answer from the
+   * token stream alone.
+   *
+   * No semantic effect: the rename map is still unique within each
+   * file (pool entries are unique, and a file's local uniqueness
+   * check is untouched). `obfuscate()` ignores the flag — pool
+   * sharing is a cross-file property by definition.
+   */
+  shareIdentifiers?: boolean;
 }
 
 export const DEFAULT_OPTIONS: ObfuscateOptions = {

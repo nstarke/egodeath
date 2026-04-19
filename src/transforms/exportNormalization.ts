@@ -33,6 +33,15 @@ export interface DispatchPlan {
   keys: string[];
   /** Shared dummy-body builder so every non-real slot has identical text. */
   dummyValueSource: string;
+  /**
+   * Per-batch starting offset used by `pickSlotForFile`. Fixed at
+   * plan creation so two files with indices i and j land on slots
+   * (jog + i) % N and (jog + j) % N — for any N > 1, i ≠ j implies
+   * the chosen slots differ. If `jog` were resampled per call, two
+   * consecutive files could collide by bad luck even in a 2-file
+   * batch.
+   */
+  jog: number;
 }
 
 /**
@@ -61,7 +70,10 @@ export function makeDispatchPlan(size: number = DEFAULT_DISPATCH_SIZE): Dispatch
   // byte-identical between files at the positions that don't hold a
   // real export.
   const dummyValueSource = 'function() { return 0; }';
-  return { keys, dummyValueSource };
+  // Jog picked once per batch so `pickSlotForFile` rotations are
+  // deterministic across files within the batch.
+  const jog = crypto.randomBytes(1)[0] % size;
+  return { keys, dummyValueSource, jog };
 }
 
 /**
@@ -288,16 +300,14 @@ export function normalizeFileExports(
 }
 
 /**
- * Produce a deterministic-per-file but batch-varying slot
- * assignment. Given a plan of N keys and the file index within its
- * batch, pick a slot that rotates through the N positions as the
- * index grows, so a 2-file batch puts the two files' default
- * exports at DIFFERENT slots (the whole point of normalization is
- * that the values move, the shape stays fixed). A small random jog
- * prevents two consecutive `obfuscateMultiple` calls with the same
- * inputs from always picking the same slots.
+ * Deterministic-within-a-batch slot assignment. Every file in the
+ * same plan rotates through the N positions as the index grows, so
+ * a 2-file batch puts the two files' default exports at DIFFERENT
+ * slots (the whole point of normalization is that the values move,
+ * the shape stays fixed). The jog in the plan varies per batch, so
+ * consecutive `obfuscateMultiple` calls with the same inputs land
+ * on different absolute slots.
  */
 export function pickSlotForFile(plan: DispatchPlan, fileIndex: number): number {
-  const jog = crypto.randomBytes(1)[0] % plan.keys.length;
-  return (fileIndex + jog) % plan.keys.length;
+  return (plan.jog + fileIndex) % plan.keys.length;
 }

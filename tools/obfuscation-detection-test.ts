@@ -92,6 +92,21 @@ interface CliOptions {
   outputJson?: string;
   dumpDir?: string;
   verbose: boolean;
+  /**
+   * Forward to `obfuscateMultiple({ normalizeExports: true })` for
+   * DIFFERENT trials. See `ObfuscateOptions` in src/options.ts.
+   * SAME trials never involve obfuscateMultiple, so this flag is a
+   * no-op for them — that's desired, since the asymmetry is
+   * precisely what we want to measure (DIFFERENT pairs get
+   * normalized + cross-polinated; SAME pairs don't).
+   */
+  normalizeExports: boolean;
+  /**
+   * Forward to `obfuscateMultiple({ shareIdentifiers: true })` for
+   * DIFFERENT trials. Same SAME/DIFFERENT asymmetry as
+   * `normalizeExports`.
+   */
+  shareIdentifiers: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -106,6 +121,8 @@ function parseArgs(argv: string[]): CliOptions {
     model: 'gpt-4o',
     sourceDir: path.resolve(__dirname, '..', 'tests'),
     verbose: false,
+    normalizeExports: false,
+    shareIdentifiers: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -122,6 +139,8 @@ function parseArgs(argv: string[]): CliOptions {
     else if (a === '--output') opts.outputJson = path.resolve(argv[++i]);
     else if (a === '--dump-dir') opts.dumpDir = path.resolve(argv[++i]);
     else if (a === '--verbose' || a === '-v') opts.verbose = true;
+    else if (a === '--normalize-exports') opts.normalizeExports = true;
+    else if (a === '--share-identifiers') opts.shareIdentifiers = true;
     else if (a === '--help' || a === '-h') {
       printUsage();
       process.exit(0);
@@ -213,6 +232,23 @@ Options:
   --dump-dir <dir>          Save every submitted sample to this directory
                             (useful for debugging a MISS)
   --verbose, -v             Print the model's raw reply for each trial
+
+  Detection-hardening flags (apply to DIFFERENT trials only; SAME
+  trials use the single-file obfuscate() path which doesn't
+  coordinate across files, so flipping these flags doesn't change
+  what SAME trials produce)
+  ───────────────────────────────────────────────────────────────
+  --normalize-exports       Rewrite both DIFFERENT-trial outputs so
+                            they end with the same-shaped
+                            module.exports = {<fixed key set>}
+                            dispatch block. Neutralises the CJS
+                            export boundary as a "which module is
+                            this?" signal.
+  --share-identifiers       Seed both DIFFERENT-trial outputs from
+                            the same random-identifier pool so the
+                            Nth gen() call in each produces the same
+                            Unicode name. Collapses identifier token
+                            overlap between sibling outputs.
 
 Environment:
   OPENAI_API_KEY            Required. Your OpenAI API key.
@@ -374,6 +410,7 @@ function produceDifferentSourcesPair(
   srcAPath: string,
   srcBPath: string,
   targetTokens: number,
+  extraOpts: { normalizeExports?: boolean; shareIdentifiers?: boolean } = {},
 ): { a: Sample; b: Sample } {
   const srcA = fs.readFileSync(srcAPath, 'utf-8');
   const srcB = fs.readFileSync(srcBPath, 'utf-8');
@@ -382,7 +419,7 @@ function produceDifferentSourcesPair(
       { filename: path.basename(srcAPath), code: srcA },
       { filename: path.basename(srcBPath), code: srcB },
     ],
-    { targetTokens },
+    { targetTokens, ...extraOpts },
   );
   return {
     a: {
@@ -530,7 +567,10 @@ async function runTrial(
     sameRegime = r.regime;
   } else {
     [srcA, srcB] = pickTwoDistinct(sources);
-    const r = produceDifferentSourcesPair(srcA, srcB, opts.targetTokens);
+    const r = produceDifferentSourcesPair(srcA, srcB, opts.targetTokens, {
+      normalizeExports: opts.normalizeExports,
+      shareIdentifiers: opts.shareIdentifiers,
+    });
     a = r.a;
     b = r.b;
     // DIFFERENT uses obfuscateMultiple once — no resize loop, so
@@ -744,7 +784,10 @@ async function main(): Promise<void> {
     console.log(`  target-tokens: ${opts.targetTokens.toLocaleString()} (SAME-trial base, DIFFERENT-trial fixed)`);
     console.log(`  SAME window:   large (max ≥ ${opts.smallFileThresholdBytes.toLocaleString()}B): delta ∈ [${opts.minDeltaBytes.toLocaleString()}, ${opts.maxDeltaBytes.toLocaleString()}]`);
     console.log(`                 small (max <  ${opts.smallFileThresholdBytes.toLocaleString()}B): delta ≤ ${opts.smallFileMaxDeltaBytes.toLocaleString()}`);
-    console.log(`  DIFFERENT:     obfuscateMultiple (shared donor pool + normalized string arrays)`);
+    const diffHardenBits: string[] = ['shared donor pool', 'normalized string arrays'];
+    if (opts.normalizeExports) diffHardenBits.push('normalized exports (dispatch object)');
+    if (opts.shareIdentifiers) diffHardenBits.push('shared identifier pool');
+    console.log(`  DIFFERENT:     obfuscateMultiple (${diffHardenBits.join(' + ')})`);
     if (opts.dumpDir) console.log(`  dump-dir:      ${opts.dumpDir}`);
     console.log('');
 
