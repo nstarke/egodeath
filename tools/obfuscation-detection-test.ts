@@ -84,6 +84,8 @@ interface CliOptions {
   targetTokens: number;
   minDeltaBytes: number;
   maxDeltaBytes: number;
+  smallFileThresholdBytes: number;
+  smallFileMaxDeltaBytes: number;
   maxResizeAttempts: number;
   model: string;
   sourceDir: string;
@@ -98,6 +100,8 @@ function parseArgs(argv: string[]): CliOptions {
     targetTokens: 25_000,
     minDeltaBytes: 100_000,
     maxDeltaBytes: 250_000,
+    smallFileThresholdBytes: 250_000,
+    smallFileMaxDeltaBytes: 25_000,
     maxResizeAttempts: 6,
     model: 'gpt-4o',
     sourceDir: path.resolve(__dirname, '..', 'tests'),
@@ -110,6 +114,8 @@ function parseArgs(argv: string[]): CliOptions {
     else if (a === '--target-tokens') opts.targetTokens = Number(argv[++i]);
     else if (a === '--min-delta') opts.minDeltaBytes = Number(argv[++i]);
     else if (a === '--max-delta') opts.maxDeltaBytes = Number(argv[++i]);
+    else if (a === '--small-file-threshold') opts.smallFileThresholdBytes = Number(argv[++i]);
+    else if (a === '--small-file-max-delta') opts.smallFileMaxDeltaBytes = Number(argv[++i]);
     else if (a === '--max-resize-attempts') opts.maxResizeAttempts = Number(argv[++i]);
     else if (a === '--model') opts.model = argv[++i];
     else if (a === '--source-dir') opts.sourceDir = path.resolve(argv[++i]);
@@ -142,6 +148,14 @@ function parseArgs(argv: string[]): CliOptions {
     console.error('--max-delta must be a positive integer greater than --min-delta');
     process.exit(2);
   }
+  if (!Number.isFinite(opts.smallFileThresholdBytes) || opts.smallFileThresholdBytes <= 0) {
+    console.error('--small-file-threshold must be a positive integer');
+    process.exit(2);
+  }
+  if (!Number.isFinite(opts.smallFileMaxDeltaBytes) || opts.smallFileMaxDeltaBytes <= 0) {
+    console.error('--small-file-max-delta must be a positive integer');
+    process.exit(2);
+  }
   return opts;
 }
 
@@ -168,16 +182,30 @@ Options:
   --runs, -n <n>            Number of trials (default: 10)
   --target-tokens <n>       Starting obfuscation target tokens (default: 25000)
                             Smaller = smaller samples = fewer API tokens used.
-  --min-delta <bytes>       Minimum byte-size difference between the two SAME
-                            samples (default: 100000). Forces the model to
-                            decide WITHOUT using size as a tell.
-  --max-delta <bytes>       Maximum byte-size difference between the two SAME
-                            samples (default: 250000).
+
+  SAME-trial delta window
+  ───────────────────────
+  Applies only to SAME trials and switches on output size:
+    * When max(bytesA, bytesB) ≥ --small-file-threshold (large-file regime),
+      the delta must fall inside [--min-delta, --max-delta].
+    * When both outputs are below --small-file-threshold (small-file
+      regime), the delta must be ≤ --small-file-max-delta. Forcing a
+      100 KB gap between two 20 KB files would leave one 8x the other,
+      which itself is a trivial tell — the small regime keeps the pair
+      close in size instead.
+
+  --min-delta <bytes>            Large-regime minimum delta (default: 100000).
+  --max-delta <bytes>            Large-regime maximum delta (default: 250000).
+  --small-file-threshold <bytes> Outputs below this enter the small regime
+                                 (default: 250000).
+  --small-file-max-delta <bytes> Small-regime maximum delta (default: 25000).
+
   --max-resize-attempts <n> For SAME trials only — how many re-obfuscations
-                            to run while trying to bring the pair's byte
-                            delta into the [--min-delta, --max-delta] range
-                            (default: 6). Each extra attempt adjusts the
-                            second sample's target-tokens.
+                            to run while trying to land inside the
+                            size-dependent delta window (default: 6). The
+                            window is recomputed each iteration, so the
+                            loop converges even when shrinking crosses the
+                            regime threshold.
   --model <name>            OpenAI model name (default: gpt-4o)
   --source-dir <dir>        Directory containing .js source files
                             (default: ./tests)
@@ -235,26 +263,57 @@ function obfuscateOne(src: string, sourcePath: string, targetTokens: number): Sa
 }
 
 /**
+ * Delta window for a SAME-trial pair, decided by the size of the
+ * current outputs:
+ *
+ *   - When both outputs are SMALL (the larger is < smallFileThreshold,
+ *     i.e. the pair would comfortably fit into one API request even
+ *     at the upper bound), we require the pair to stay WITHIN
+ *     smallFileMaxDelta bytes of each other. A 150KB gap on two
+ *     20KB files would leave one sample 8x larger than the other —
+ *     that size ratio is itself a trivial tell, so small pairs get
+ *     the "close in size" treatment instead.
+ *
+ *   - Once at least one output has grown past smallFileThreshold,
+ *     the pair is in the "large file" regime and the delta must
+ *     live inside [minDelta, maxDelta]. A 100–250KB gap on
+ *     >250KB files is proportionally small and forces the model
+ *     to rely on semantic invariants rather than size ratios.
+ */
+function deltaWindowFor(
+  maxSize: number,
+  opts: CliOptions,
+): { min: number; max: number; regime: 'small' | 'large' } {
+  if (maxSize < opts.smallFileThresholdBytes) {
+    return { min: 0, max: opts.smallFileMaxDeltaBytes, regime: 'small' };
+  }
+  return { min: opts.minDeltaBytes, max: opts.maxDeltaBytes, regime: 'large' };
+}
+
+/**
  * SAME-trial pair: obfuscate the same source twice at DIFFERENT
  * target-token budgets so the byte delta between the two outputs
- * falls within [minDeltaBytes, maxDeltaBytes]. The point is to make
- * size a red herring — the model sees "these two differ in size by
- * 150 KB" and has to decide SAME or DIFFERENT on semantic grounds,
- * not on output volume.
+ * lands inside the size-dependent window computed by
+ * `deltaWindowFor`. Size stops being a usable cue for SAME vs
+ * DIFFERENT — the model has to look past it.
  *
- * Starts with A at `baseTokens` and B at 3x, then nudges B up or
- * down based on the measured delta. Convergence is fast because
- * output bytes scale roughly linearly with target-tokens within the
- * bloat budget's operating range.
+ * Starts with A at `baseTokens` and B at 3x, then nudges whichever
+ * sample is currently larger toward the midpoint of the active
+ * window. The window itself is recomputed on every iteration because
+ * shrinking one sample can move the pair across the small/large
+ * regime threshold — the loop still converges because each iteration
+ * either moves the larger sample toward the midpoint (small regime)
+ * or moves it into the [min, max] window (large regime) and the
+ * byte→token rate stays stable within the bloat budget's operating
+ * range.
  */
 function produceSameSourcePair(
   src: string,
   sourcePath: string,
   baseTokens: number,
-  minDeltaBytes: number,
-  maxDeltaBytes: number,
+  opts: CliOptions,
   maxAttempts: number,
-): { a: Sample; b: Sample; attempts: number; converged: boolean } {
+): { a: Sample; b: Sample; attempts: number; converged: boolean; regime: 'small' | 'large' } {
   let tokensA = baseTokens;
   let tokensB = Math.max(baseTokens + 1000, Math.round(baseTokens * 3));
   let a = obfuscateOne(src, sourcePath, tokensA);
@@ -262,26 +321,20 @@ function produceSameSourcePair(
   let attempts = 1;
 
   while (attempts < maxAttempts) {
+    const maxSize = Math.max(a.bytes, b.bytes);
+    const window = deltaWindowFor(maxSize, opts);
     const delta = Math.abs(a.bytes - b.bytes);
-    if (delta >= minDeltaBytes && delta <= maxDeltaBytes) break;
+    if (delta >= window.min && delta <= window.max) break;
 
-    // Always adjust the larger-token side (which usually maps to the
-    // larger byte side) so the smaller sample stays anchored and the
-    // adjustments converge on the target window.
-    const target = delta < minDeltaBytes
-      // Gap too narrow — push them apart.
-      ? (minDeltaBytes + maxDeltaBytes) / 2
-      // Gap too wide — pull them together.
-      : (minDeltaBytes + maxDeltaBytes) / 2;
-    // Linear byte→token scaling: take the side we want to grow/shrink,
-    // compute its per-token byte rate, and jump to the token count
-    // that should produce the target gap.
+    // Aim at the midpoint of the active window. Small regime:
+    // midpoint ≈ smallMax/2 (shrink the gap). Large regime: midpoint
+    // of [min, max] (shrink a too-wide gap or widen a too-narrow one).
+    const target = (window.min + window.max) / 2;
     const bigger = b.bytes >= a.bytes ? 'b' : 'a';
     if (bigger === 'b') {
       const rate = b.bytes / Math.max(1, b.targetTokens);
       const desiredB = a.bytes + target;
       tokensB = Math.max(1000, Math.round(desiredB / Math.max(1, rate)));
-      // Keep A pinned; any resize attempts fan out from here.
       b = obfuscateOne(src, sourcePath, tokensB);
     } else {
       const rate = a.bytes / Math.max(1, a.targetTokens);
@@ -292,12 +345,15 @@ function produceSameSourcePair(
     attempts++;
   }
 
+  const maxSize = Math.max(a.bytes, b.bytes);
+  const finalWindow = deltaWindowFor(maxSize, opts);
   const finalDelta = Math.abs(a.bytes - b.bytes);
   return {
     a,
     b,
     attempts,
-    converged: finalDelta >= minDeltaBytes && finalDelta <= maxDeltaBytes,
+    converged: finalDelta >= finalWindow.min && finalDelta <= finalWindow.max,
+    regime: finalWindow.regime,
   };
 }
 
@@ -430,6 +486,13 @@ interface TrialResult {
   targetTokensB: number;
   resizeAttempts: number;
   converged: boolean;
+  /**
+   * For SAME trials: which delta-window regime applied — 'small' when
+   * max(bytesA, bytesB) < --small-file-threshold (delta capped at
+   * --small-file-max-delta), 'large' otherwise (delta must fall in
+   * [--min-delta, --max-delta]). Not set for DIFFERENT trials.
+   */
+  sameRegime?: 'small' | 'large';
   rawResponse?: string;
   error?: string;
 }
@@ -448,6 +511,7 @@ async function runTrial(
   let attempts = 1;
   let converged = true;
 
+  let sameRegime: 'small' | 'large' | undefined;
   if (actual === 'SAME') {
     srcA = pickOne(sources);
     srcB = srcA;
@@ -456,14 +520,14 @@ async function runTrial(
       src,
       srcA,
       opts.targetTokens,
-      opts.minDeltaBytes,
-      opts.maxDeltaBytes,
+      opts,
       opts.maxResizeAttempts,
     );
     a = r.a;
     b = r.b;
     attempts = r.attempts;
     converged = r.converged;
+    sameRegime = r.regime;
   } else {
     [srcA, srcB] = pickTwoDistinct(sources);
     const r = produceDifferentSourcesPair(srcA, srcB, opts.targetTokens);
@@ -496,6 +560,7 @@ async function runTrial(
     targetTokensB: b.targetTokens,
     resizeAttempts: attempts,
     converged,
+    sameRegime,
   };
 
   try {
@@ -566,7 +631,7 @@ function printSummary(trials: TrialResult[], opts: CliOptions): void {
   );
 
   console.log('\n  Per-trial detail:');
-  console.log('    #   actual      predicted    status   sizeA    sizeB    delta    source A → source B');
+  console.log('    #   actual      predicted    status   sizeA    sizeB    delta    regime  source A → source B');
   for (const t of trials) {
     const status = t.error
       ? 'ERROR'
@@ -577,6 +642,7 @@ function printSummary(trials: TrialResult[], opts: CliOptions): void {
       : 'MISS ';
     const srcA = path.basename(t.sourceA);
     const srcB = path.basename(t.sourceB);
+    const regimeLabel = t.actual === 'SAME' ? (t.sameRegime ?? '?').padEnd(6) : '—     ';
     console.log(
       `    ${String(t.index + 1).padStart(3)}  ` +
         `${t.actual.padEnd(10)}  ` +
@@ -585,6 +651,7 @@ function printSummary(trials: TrialResult[], opts: CliOptions): void {
         `${fmtKB(t.bytesA).padStart(6)}  ` +
         `${fmtKB(t.bytesB).padStart(6)}  ` +
         `${fmtKB(t.deltaBytes).padStart(6)}${t.converged ? ' ' : '*'}  ` +
+        `${regimeLabel}  ` +
         `${srcA} → ${srcB}`,
     );
     if (t.error) {
@@ -598,7 +665,8 @@ function printSummary(trials: TrialResult[], opts: CliOptions): void {
   const anyOverLimit = trials.some((t) => !t.error && !t.converged);
   if (anyOverLimit) {
     console.log(
-      '\n  * SAME-trial delta landed outside [--min-delta, --max-delta] after exhausting resize attempts.',
+      '\n  * SAME-trial delta landed outside its active window after exhausting resize attempts' +
+        ' (small regime: ≤ --small-file-max-delta; large regime: [--min-delta, --max-delta]).',
     );
   }
 }
@@ -674,7 +742,8 @@ async function main(): Promise<void> {
     console.log(`  git HEAD:      ${shaDisplay}`);
     console.log(`  source-dir:    ${opts.sourceDir} (${sources.length} .js files)`);
     console.log(`  target-tokens: ${opts.targetTokens.toLocaleString()} (SAME-trial base, DIFFERENT-trial fixed)`);
-    console.log(`  delta range:   ${opts.minDeltaBytes.toLocaleString()} – ${opts.maxDeltaBytes.toLocaleString()} bytes (SAME trials)`);
+    console.log(`  SAME window:   large (max ≥ ${opts.smallFileThresholdBytes.toLocaleString()}B): delta ∈ [${opts.minDeltaBytes.toLocaleString()}, ${opts.maxDeltaBytes.toLocaleString()}]`);
+    console.log(`                 small (max <  ${opts.smallFileThresholdBytes.toLocaleString()}B): delta ≤ ${opts.smallFileMaxDeltaBytes.toLocaleString()}`);
     console.log(`  DIFFERENT:     obfuscateMultiple (shared donor pool + normalized string arrays)`);
     if (opts.dumpDir) console.log(`  dump-dir:      ${opts.dumpDir}`);
     console.log('');
@@ -690,10 +759,17 @@ async function main(): Promise<void> {
         const marker = t.predicted === 'UNKNOWN' ? '?' : t.match ? 'OK' : 'MISS';
         // Only SAME trials target a specific delta window; DIFFERENT
         // trials don't rebalance and converged is always true by
-        // construction, so no tag is appended for them.
-        const deltaTag = t.converged
-          ? ''
-          : ` (delta ${fmtKB(t.deltaBytes)} outside [${fmtKB(opts.minDeltaBytes)}, ${fmtKB(opts.maxDeltaBytes)}])`;
+        // construction, so no tag is appended for them. The active
+        // regime drives which bounds appear in the warning.
+        let deltaTag = '';
+        if (!t.converged) {
+          const windowStr =
+            t.sameRegime === 'small'
+              ? `≤ ${fmtKB(opts.smallFileMaxDeltaBytes)}`
+              : `[${fmtKB(opts.minDeltaBytes)}, ${fmtKB(opts.maxDeltaBytes)}]`;
+          const regimeTag = t.sameRegime ? ` ${t.sameRegime}-regime` : '';
+          deltaTag = ` (delta ${fmtKB(t.deltaBytes)} outside ${windowStr}${regimeTag})`;
+        }
         console.log(
           `actual=${t.actual} predicted=${t.predicted} [${marker}] ` +
             `sizes=${fmtKB(t.bytesA)}/${fmtKB(t.bytesB)}${deltaTag}`,
