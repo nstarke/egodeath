@@ -1,5 +1,6 @@
 import { applyRegexEncoding } from '../transforms/regexEncoding';
 import { obfuscate } from '../obfuscator';
+import { resetCapturedGlobals, flushCapturedGlobals } from '../capturedGlobals';
 import * as recast from 'recast';
 
 const babelParser = require('recast/parsers/babel');
@@ -9,16 +10,22 @@ function parse(code: string): any {
 }
 
 function transform(code: string): string {
+  resetCapturedGlobals();
   const ast = parse(code);
   applyRegexEncoding(ast);
+  flushCapturedGlobals(ast);
   return recast.print(ast).code;
 }
 
 describe('applyRegexEncoding', () => {
-  it('converts regex literals to new RegExp()', () => {
+  it('converts regex literals to new-expressions backed by a RegExp capture', () => {
     const out = transform('var x = /test/;');
-    expect(out).toContain('new RegExp(');
-    expect(out).toContain('"test"');
+    // The transform captures `RegExp` at program level under a fresh
+    // name to survive `var RegExp = ...` shadowing inside nested
+    // scopes (see lodash runInContext). The rewritten literal should
+    // still be a `new`-expression of that capture.
+    expect(out).toMatch(/var\s+\S+\s*=\s*RegExp\s*;/);
+    expect(out).toMatch(/new\s+\S+\s*\(\s*"test"/);
     expect(out).not.toContain('/test/');
   });
 
@@ -30,15 +37,15 @@ describe('applyRegexEncoding', () => {
 
   it('handles regex without flags', () => {
     const out = transform('var x = /simple/;');
-    expect(out).toContain('new RegExp("simple")');
-    // Should NOT have a flags argument
-    expect(out).not.toContain('new RegExp("simple", ');
+    expect(out).toMatch(/new\s+\S+\s*\(\s*"simple"\s*\)/);
+    // No flags argument
+    expect(out).not.toMatch(/"simple"\s*,/);
   });
 
   it('preserves backslash sequences in patterns', () => {
     const code = String.raw`var x = /^\d+$/;`;
     const out = transform(code);
-    expect(out).toContain('new RegExp(');
+    expect(out).toMatch(/new\s+\S+\s*\(/);
     // The pattern should still contain \d
     expect(out).toContain('\\d');
   });
@@ -46,14 +53,14 @@ describe('applyRegexEncoding', () => {
   it('converts multiple regex literals', () => {
     const code = 'var a = /foo/; var b = /bar/g; var c = /baz/i;';
     const out = transform(code);
-    const regexpCount = (out.match(/new RegExp\(/g) || []).length;
-    expect(regexpCount).toBe(3);
+    const newCount = (out.match(/\bnew\s+\S+\s*\(/g) || []).length;
+    expect(newCount).toBe(3);
   });
 
   it('handles complex regex patterns', () => {
     const code = String.raw`var x = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;`;
     const out = transform(code);
-    expect(out).toContain('new RegExp(');
+    expect(out).toMatch(/new\s+\S+\s*\(/);
     expect(out).not.toMatch(/\/\^/); // No regex literal start
   });
 });

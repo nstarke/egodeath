@@ -236,9 +236,14 @@ function smokeTestBundle(bundlePath: string): string | null {
   if (result.status === 0) return null;
 
   const stderr = (result.stderr || Buffer.from('')).toString();
-  // Node dumps the full source before the error — trim to just the diagnostic tail.
-  const lines = stderr.split('\n').filter((l) => l.trim().length > 0);
-  return lines.slice(-6).join(' | ').slice(0, 400);
+  // Strip source dumps (very long lines) and keep only the diagnostic
+  // lines so the actual error surfaces instead of 60KB of bundle source.
+  // Node prints the failing source line in full when the bundle is one
+  // big minified line — that swamps the error text, so we filter it out.
+  const lines = stderr
+    .split('\n')
+    .filter((l) => l.trim().length > 0 && l.trim().length < 300);
+  return lines.join(' | ').slice(0, 500);
 }
 
 /**

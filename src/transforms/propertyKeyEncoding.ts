@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
+import { captureGlobal } from '../capturedGlobals';
 
 // ---- Helpers ----
 
@@ -80,7 +81,7 @@ function id(name: string): any {
  * leaving the original property name. Different scopes get different
  * suffixes but all resolve to the same property name at runtime.
  */
-function buildPropVarDecl(varName: string, propName: string): any {
+function buildPropVarDecl(ast: any, varName: string, propName: string): any {
   const suffix = randomSuffix();
   const regexPattern = escapeRegex(suffix) + '$';
   return {
@@ -100,7 +101,9 @@ function buildPropVarDecl(varName: string, propName: string): any {
         arguments: [
           {
             type: 'NewExpression',
-            callee: id('RegExp'),
+            // Program-level capture of RegExp to survive local shadowing.
+            // See capturedGlobals.ts.
+            callee: id(captureGlobal(ast, 'RegExp')),
             arguments: [{ type: 'StringLiteral', value: regexPattern }],
           },
           { type: 'StringLiteral', value: '' },
@@ -133,7 +136,7 @@ interface Replacement {
  */
 export function applyPropertyKeyEncoding(ast: any): void {
   // Process each function body and the program body
-  processBody(ast.program.body);
+  processBody(ast, ast.program.body);
 
   estraverse.traverse(ast.program, {
     keys: VISITOR_KEYS,
@@ -145,7 +148,7 @@ export function applyPropertyKeyEncoding(ast: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        processBody(node.body.body);
+        processBody(ast, node.body.body);
       }
     },
     fallback: 'iteration',
@@ -157,7 +160,7 @@ export function applyPropertyKeyEncoding(ast: any): void {
  * keys, generate encoding variables, prepend declarations, and convert
  * to computed access.
  */
-function processBody(body: any[]): void {
+function processBody(ast: any, body: any[]): void {
   const replacements: Replacement[] = [];
 
   // Walk all nodes in this body to find property accesses
@@ -181,7 +184,7 @@ function processBody(body: any[]): void {
   // Generate one var declaration per unique property name
   const varDecls: any[] = [];
   for (const [propName, varName] of propToVar) {
-    varDecls.push(buildPropVarDecl(varName, propName));
+    varDecls.push(buildPropVarDecl(ast, varName, propName));
   }
 
   // Apply replacements — morph nodes in place

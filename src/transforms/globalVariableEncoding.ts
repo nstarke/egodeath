@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
+import { captureGlobal } from '../capturedGlobals';
 
 // ---- Helpers ----
 
@@ -85,7 +86,7 @@ function id(name: string): any {
  * Both StringLiterals ("Name<suffix>" and "<suffix>$") will be
  * picked up by string array extraction and jsfuck-encoded.
  */
-function buildEvalReplace(globalName: string): any {
+function buildEvalReplace(ast: any, globalName: string): any {
   const suffix = randomSuffix();
   const fullString = globalName + suffix;
   const regexPattern = escapeRegex(suffix) + '$';
@@ -104,7 +105,10 @@ function buildEvalReplace(globalName: string): any {
       arguments: [
         {
           type: 'NewExpression',
-          callee: id('RegExp'),
+          // Program-level capture of RegExp survives `var RegExp = …`
+          // shadowing inside lodash-style runInContext. See
+          // capturedGlobals.ts.
+          callee: id(captureGlobal(ast, 'RegExp')),
           arguments: [{ type: 'StringLiteral', value: regexPattern }],
         },
         { type: 'StringLiteral', value: '' },
@@ -225,12 +229,17 @@ export function applyGlobalVariableEncoding(ast: any): void {
     keys: VISITOR_KEYS,
     enter(node: any, parent: any) {
       if (node.type !== 'Identifier') return;
+      // Skip the synthetic init of a capturedGlobals bootstrap decl:
+      // encoding `var X = RegExp;` as `var X = eval(...)` that itself
+      // references `new X(...)` would dereference X before it's
+      // assigned. See capturedGlobals.ts.
+      if ((node as any).__capturedGlobalInit) return;
       if (!getEncodableGlobals().has(node.name)) return;
       if (!isGlobalReference(node, parent)) return;
 
       replacements.push({
         node,
-        replacement: buildEvalReplace(node.name),
+        replacement: buildEvalReplace(ast, node.name),
       });
     },
     fallback: 'iteration',

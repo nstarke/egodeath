@@ -3,6 +3,7 @@ import * as estraverse from 'estraverse';
 import { ASTNode, PassHandlerMap } from './types';
 import { resetGlobals, resetWindowProps } from './globals';
 import { resetIssuedNames } from './random';
+import { resetCapturedGlobals, flushCapturedGlobals } from './capturedGlobals';
 import { buildConsoleKeywords } from './keywords';
 import { firstPassHandlers } from './passes/firstPass';
 import { secondPassHandlers } from './passes/secondPass';
@@ -99,6 +100,7 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   resetGlobals();
   resetWindowProps();
   resetIssuedNames();
+  resetCapturedGlobals();
 
   // Strip shebang line if present — parsers can't handle it
   let shebang = '';
@@ -197,10 +199,20 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // pattern strings flow through string array extraction.
   applyRegexEncoding(ast);
 
+  if (process.env.EGODEATH_DEBUG_REGEXP) {
+    const count = (recast.print(ast).code.match(/=\s*RegExp\b/g) || []).length;
+    process.stderr.write('[after regexEnc] RegExp count: ' + count + '\n');
+  }
+
   // Post-transform: string array extraction + rotation
   // Collects all string literals into a rotated array, replaces with accessor calls
   // Runs last so it captures all strings including global+property name strings
   applyStringArrayExtraction(ast, budget);
+
+  if (process.env.EGODEATH_DEBUG_REGEXP) {
+    const count = (recast.print(ast).code.match(/=\s*RegExp\b/g) || []).length;
+    process.stderr.write('[after stringArrayExt] RegExp count: ' + count + '\n');
+  }
 
   // Self-integrity verification (Paper 10: dual-mode hash check)
   // Checks that eval, toString, and code structure haven't been tampered with.
@@ -209,7 +221,21 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     applySelfIntegrity(ast);
   }
 
-  // Prepend console stubs
+  if (process.env.EGODEATH_DEBUG_REGEXP) {
+    const code = recast.print(ast).code;
+    const count = (code.match(/=\s*RegExp\b/g) || []).length;
+    const vars = ast.program.body.filter((s: any) => s.type === 'VariableDeclaration').length;
+    process.stderr.write('[pre-console-prepend] RegExp count: ' + count + ' body.len=' + ast.program.body.length + ' vars=' + vars + '\n');
+  }
+
+  // Flush built-in-global captures (RegExp, etc.) into ast.program.body
+  // as the outermost declarations. Must happen after every transform that
+  // might call captureGlobal(), and before the console-stub prepend so
+  // captures land at program position 0 — guaranteeing they run before
+  // any use site, even when source code later shadows the global with
+  // `var RegExp = …` (lodash runInContext). See capturedGlobals.ts.
+  flushCapturedGlobals(ast);
+
   const consoleKeywords = buildConsoleKeywords();
   ast.program.body = consoleKeywords.concat(ast.program.body);
 

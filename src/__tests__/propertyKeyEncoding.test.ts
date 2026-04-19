@@ -1,5 +1,6 @@
 import { applyPropertyKeyEncoding } from '../transforms/propertyKeyEncoding';
 import { obfuscate } from '../obfuscator';
+import { resetCapturedGlobals, flushCapturedGlobals } from '../capturedGlobals';
 import * as recast from 'recast';
 
 const babelParser = require('recast/parsers/babel');
@@ -9,8 +10,10 @@ function parse(code: string): any {
 }
 
 function transform(code: string): string {
+  resetCapturedGlobals();
   const ast = parse(code);
   applyPropertyKeyEncoding(ast);
+  flushCapturedGlobals(ast);
   return recast.print(ast).code;
 }
 

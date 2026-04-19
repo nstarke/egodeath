@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
+import { captureGlobal } from '../capturedGlobals';
 
 // ---- Helpers ----
 
@@ -44,7 +45,7 @@ function num(value: number): any {
  * and XOR+hex encoded, so the word "debugger" never appears in
  * the final output.
  */
-function buildEncodedDebuggerString(): any {
+function buildEncodedDebuggerString(ast: any): any {
   const suffix = randomSuffix();
   const regexPattern = escapeRegex(suffix) + '$';
 
@@ -59,7 +60,10 @@ function buildEncodedDebuggerString(): any {
     arguments: [
       {
         type: 'NewExpression',
-        callee: id('RegExp'),
+        // Reference a program-level capture of `RegExp` so the helper
+        // keeps working inside a function that locally shadows RegExp
+        // (see capturedGlobals.ts for the full rationale).
+        callee: id(captureGlobal(ast, 'RegExp')),
         arguments: [str(regexPattern)],
       },
       str(''),
@@ -73,13 +77,13 @@ function buildEncodedDebuggerString(): any {
  * At runtime this evaluates to eval("debugger") which triggers a
  * breakpoint. Each instance has a unique suffix so no two are alike.
  */
-function buildEvalDebugger(): any {
+function buildEvalDebugger(ast: any): any {
   return {
     type: 'ExpressionStatement',
     expression: {
       type: 'CallExpression',
       callee: id('eval'),
-      arguments: [buildEncodedDebuggerString()],
+      arguments: [buildEncodedDebuggerString(ast)],
     },
   };
 }
@@ -115,7 +119,7 @@ const PRIME_INTERVALS = [
   550007, 599999,
 ];
 
-function buildSetIntervalDebugger(): any {
+function buildSetIntervalDebugger(ast: any): any {
   const interval = PRIME_INTERVALS[randInt(0, PRIME_INTERVALS.length - 1)];
 
   return {
@@ -135,7 +139,7 @@ function buildSetIntervalDebugger(): any {
               expression: {
                 type: 'CallExpression',
                 callee: id('eval'),
-                arguments: [buildEncodedDebuggerString()],
+                arguments: [buildEncodedDebuggerString(ast)],
               },
             }],
           },
@@ -155,12 +159,12 @@ function buildSetIntervalDebugger(): any {
  *     ...
  *   })();
  */
-function buildAntiDebugIIFE(): any {
+function buildAntiDebugIIFE(ast: any): any {
   const count = randInt(10, 20);
   const body: any[] = [];
 
   for (let i = 0; i < count; i++) {
-    body.push(buildSetIntervalDebugger());
+    body.push(buildSetIntervalDebugger(ast));
   }
 
   return {
@@ -251,20 +255,20 @@ export function applyAntiDebug(ast: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        injectDebuggerStatements(node.body);
+        injectDebuggerStatements(ast, node.body);
       }
     },
     fallback: 'iteration',
   } as any);
 
   // Prepend the anti-debug IIFE with setInterval traps
-  ast.program.body.unshift(buildAntiDebugIIFE());
+  ast.program.body.unshift(buildAntiDebugIIFE(ast));
 }
 
 /**
  * Inject eval("debugger") at random positions in a block.
  */
-function injectDebuggerStatements(block: any): void {
+function injectDebuggerStatements(ast: any, block: any): void {
   const stmts: any[] = block.body;
   if (stmts.length < 2) return;
 
@@ -273,7 +277,7 @@ function injectDebuggerStatements(block: any): void {
   for (const stmt of stmts) {
     // ~15% chance to inject a debugger trap before this statement
     if (randInt(1, 100) <= 15) {
-      newBody.push(buildEvalDebugger());
+      newBody.push(buildEvalDebugger(ast));
     }
     newBody.push(stmt);
   }

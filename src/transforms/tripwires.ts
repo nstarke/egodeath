@@ -84,19 +84,33 @@ function block(body: any[]): any {
  * typeof check + hash comparison:
  *   if (typeof <param> === "string" && (<param>.length ^ <mask>) === <secret>)
  *
- * Looks like input validation. Triggers only for a specific string length
- * after XOR masking — effectively never for real inputs.
+ * Looks like input validation. The hash is bounded by 0xFFFF (XOR of a
+ * length and a 16-bit mask), so `secret` is chosen above that ceiling —
+ * the condition is statically unreachable for real strings but reads
+ * like a length check at a glance.
+ *
+ * The `.length` access is guarded by a `typeof … === "string"` ternary:
+ * a prior version read `param.length` unconditionally, which threw
+ * `Cannot read properties of undefined (reading 'length')` whenever a
+ * tripwire landed on a function that was sometimes called with
+ * `undefined` (lodash's many defaulted params hit this constantly).
  */
 function buildTypeofTripwire(paramName: string): { condition: any; setup: any[] } {
   const mask = randInt(0x100, 0xFFFF);
   const secret = randInt(0x10000, 0x7FFFFFFF);
   const hashVar = gen();
 
-  // Safe: use (param.length || 0) to avoid NaN on non-string types
   return {
     setup: [
       varDecl(hashVar, bin('^',
-        bin('|', member(id(paramName), id('length')), num(0)),
+        {
+          type: 'ConditionalExpression',
+          test: bin('===',
+            { type: 'UnaryExpression', operator: 'typeof', argument: id(paramName), prefix: true },
+            str('string')),
+          consequent: bin('|', member(id(paramName), id('length')), num(0)),
+          alternate: num(0),
+        },
         num(mask))),
     ],
     condition: bin('&&',
@@ -107,10 +121,24 @@ function buildTypeofTripwire(paramName: string): { condition: any; setup: any[] 
 
 /**
  * Numeric hash comparison:
- *   var h = ((param * prime) >>> 0) ^ seed;
+ *   var h = typeof param === 'number'
+ *             ? ((param | 0) * prime >>> 0) ^ seed
+ *             : seed;
  *   if (h === secret)
  *
- * Looks like a hash-based cache lookup or memoization check.
+ * Looks like a hash-based cache lookup or memoization check. The
+ * typeof guard is load-bearing: `param | 0` forces ToNumber, which
+ * for objects walks valueOf → toString. In lodash, mixin installs a
+ * wrapped toString that calls `this.value()` BEFORE
+ * `lodash.prototype.value` is assigned — a tripwire firing in that
+ * window would coerce a wrapper, invoke the half-initialised
+ * toString, and throw `this.value is not a function`. Guarding on
+ * the primitive type avoids every ToPrimitive path.
+ *
+ * `seed` is independent of `secret` (both drawn uniformly from
+ * [0x1000, 0x7FFFFFFF] and [0x10000, 0x7FFFFFFF]); so the
+ * non-numeric fallback `h === seed` collides with secret with
+ * probability ~1/2^31.
  */
 function buildNumericHashTripwire(paramName: string): { condition: any; setup: any[] } {
   const prime = pick([2654435761, 1597334677, 2246822519, 3266489917]);
@@ -118,12 +146,18 @@ function buildNumericHashTripwire(paramName: string): { condition: any; setup: a
   const secret = randInt(0x10000, 0x7FFFFFFF);
   const hashVar = gen();
 
-  // Safe: (param | 0) ensures integer, avoids NaN from non-numeric types
   return {
     setup: [
-      varDecl(hashVar, bin('^',
-        bin('>>>', bin('*', bin('|', id(paramName), num(0)), num(prime)), num(0)),
-        num(seed))),
+      varDecl(hashVar, {
+        type: 'ConditionalExpression',
+        test: bin('===',
+          { type: 'UnaryExpression', operator: 'typeof', argument: id(paramName), prefix: true },
+          str('number')),
+        consequent: bin('^',
+          bin('>>>', bin('*', bin('|', id(paramName), num(0)), num(prime)), num(0)),
+          num(seed)),
+        alternate: num(seed),
+      }),
     ],
     condition: bin('===', id(hashVar), num(secret)),
   };
@@ -133,10 +167,16 @@ function buildNumericHashTripwire(paramName: string): { condition: any; setup: a
  * String charCodeAt comparison:
  *   if (typeof param === "string" && (param.charCodeAt(0) ^ param.charCodeAt(param.length-1)) === secret)
  *
- * Looks like a string format validation check.
+ * Looks like a string format validation check. The hash is bounded by
+ * 0xFFFF (XOR of two 16-bit char codes), so `secret` is chosen above
+ * that ceiling — the condition is statically unreachable for real
+ * strings, but indistinguishable at a glance from legitimate format
+ * validation. Prior versions chose secret in [0x100, 0xFFFF], which
+ * created a ~1/65k collision rate per call — frequent enough to
+ * intermittently corrupt lodash/moment initialization.
  */
 function buildCharCodeTripwire(paramName: string): { condition: any; setup: any[] } {
-  const secret = randInt(0x100, 0xFFFF);
+  const secret = randInt(0x10000, 0x7FFFFFFF);
   const hashVar = gen();
 
   // Safe: only compute charCodeAt if param is a string, else use 0
@@ -161,22 +201,38 @@ function buildCharCodeTripwire(paramName: string): { condition: any; setup: any[
  *   var h = ((param % prime1) * prime2 + param) % modulus;
  *   if (h === secret)
  *
- * Looks like a hash bucket computation or ID validation.
+ * Looks like a hash bucket computation or ID validation. The modulus
+ * caps the output, so `secret` is chosen strictly above the modulus
+ * and the condition is statically unreachable. Prior versions drew
+ * secret from [0, modulus-1] with modulus as small as 997 — a 1/997
+ * collision rate per call, which caused ~60% of fresh lodash
+ * obfuscations to trip payload corruption during module load.
  */
 function buildModularTripwire(paramName: string): { condition: any; setup: any[] } {
   const prime1 = pick([7, 11, 13, 17, 19, 23, 29, 31]);
   const prime2 = pick([37, 41, 43, 47, 53, 59, 61, 67]);
   const modulus = pick([997, 1009, 2003, 4007, 8009]);
-  const secret = randInt(0, modulus - 1);
+  const secret = randInt(modulus + 1, 0x7FFFFFFF);
   const hashVar = gen();
 
+  // Guarded on `typeof param === 'number'`: `param % prime1` coerces
+  // objects via ToNumber → valueOf → toString, which can execute
+  // half-initialised user code during module load. See
+  // buildNumericHashTripwire for the lodash trigger path.
   return {
     setup: [
-      varDecl(hashVar, bin('%',
-        bin('+',
-          bin('*', bin('%', id(paramName), num(prime1)), num(prime2)),
-          id(paramName)),
-        num(modulus))),
+      varDecl(hashVar, {
+        type: 'ConditionalExpression',
+        test: bin('===',
+          { type: 'UnaryExpression', operator: 'typeof', argument: id(paramName), prefix: true },
+          str('number')),
+        consequent: bin('%',
+          bin('+',
+            bin('*', bin('%', id(paramName), num(prime1)), num(prime2)),
+            id(paramName)),
+          num(modulus)),
+        alternate: num(0),
+      }),
     ],
     condition: bin('===', id(hashVar), num(secret)),
   };
@@ -196,11 +252,22 @@ function buildBitwiseFingerprintTripwire(paramName: string): { condition: any; s
   const h1 = gen();
   const h2 = gen();
 
+  // Guarded on `typeof param === 'number'`: `param ^ (param >>> 16)`
+  // triggers ToNumber on objects, which walks valueOf/toString. For
+  // the lodash/module-load hazard this avoids, see
+  // buildNumericHashTripwire.
   return {
     setup: [
-      varDecl(h1, bin('*',
-        bin('^', id(paramName), bin('>>>', id(paramName), num(16))),
-        num(multiplier))),
+      varDecl(h1, {
+        type: 'ConditionalExpression',
+        test: bin('===',
+          { type: 'UnaryExpression', operator: 'typeof', argument: id(paramName), prefix: true },
+          str('number')),
+        consequent: bin('*',
+          bin('^', id(paramName), bin('>>>', id(paramName), num(16))),
+          num(multiplier)),
+        alternate: num(0),
+      }),
       varDecl(h2, bin('>>>', bin('^', id(h1), bin('>>>', id(h1), num(16))), num(0))),
     ],
     condition: bin('===', id(h2), num(secret)),

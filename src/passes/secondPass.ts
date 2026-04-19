@@ -89,15 +89,19 @@ export const secondPassHandlers: PassHandlerMap = {
     // access (`{[v]: 1}` where `v === "foo"` at runtime), preserving
     // semantics while still obscuring the name.
     //
-    // Only expand shorthand when the value IS a plain Identifier tied to
-    // the key — i.e. the literal `{foo}` form. Destructuring-with-default
-    // like `{foo = NOOP}` also carries shorthand:true but wraps the
-    // binding in an AssignmentPattern we must preserve. Clobbering that
-    // value node drops the default and turns the local into `undefined`.
-    if (node.shorthand && node.key && node.value
-        && node.value.type === 'Identifier'
-        && node.value.name === node.key.name) {
-      node.value = { type: 'Identifier', name: node.key.name };
+    // Shorthand is the visual sugar `{foo}` / `{foo = d}` that assumes
+    // key.name === binding-name. We're about to rename the binding (via
+    // AssignmentPattern.left or Identifier value substitution) so the
+    // two sides will diverge — recast's shorthand printer would then
+    // drop the original key and print just the renamed binding as the
+    // key, silently changing the object's shape. Flip shorthand off
+    // up-front so the key is always emitted explicitly. Keep a separate
+    // value node when the source literally wrote `{foo}` so further
+    // handlers don't mutate the key by accident.
+    if (node.shorthand && node.key && node.value) {
+      if (node.value.type === 'Identifier' && node.value.name === node.key.name) {
+        node.value = { type: 'Identifier', name: node.key.name };
+      }
       node.shorthand = false;
     }
     if (node.computed) {
@@ -471,16 +475,16 @@ export const secondPassHandlers: PassHandlerMap = {
 
   // Babel uses ObjectProperty and ObjectMethod instead of Property
   ObjectProperty(node) {
-    // See Property handler — same rationale: keep the property name.
-    // Only split shorthand when the value is a plain same-named
-    // Identifier (`{foo}`). `{foo = default}` and other patterns carry
-    // shorthand:true but hold an AssignmentPattern / nested pattern in
-    // `.value` that must stay intact — overwriting it drops defaults and
-    // nested destructuring.
-    if (node.shorthand && node.key && node.value
-        && node.value.type === 'Identifier'
-        && node.value.name === node.key.name) {
-      node.value = { type: 'Identifier', name: node.key.name };
+    // See Property handler — same rationale: preserve the property name
+    // and flip shorthand off before binding substitution diverges
+    // key.name from the binding's name. Preserving the source key is
+    // critical for destructuring against an externally-shaped object
+    // (`const {encodePath = d} = options`) — otherwise recast renders
+    // `{renamed = d}`, the lookup miss-targets, and the default fires.
+    if (node.shorthand && node.key && node.value) {
+      if (node.value.type === 'Identifier' && node.value.name === node.key.name) {
+        node.value = { type: 'Identifier', name: node.key.name };
+      }
       node.shorthand = false;
     }
     if (node.computed) {

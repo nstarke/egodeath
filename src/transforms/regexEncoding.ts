@@ -1,4 +1,5 @@
 import * as estraverse from 'estraverse';
+import { captureGlobal } from '../capturedGlobals';
 
 /**
  * Regex Encoding Transform
@@ -66,6 +67,15 @@ const VISITOR_KEYS: { [key: string]: string[] } = {
 /**
  * Convert all RegExp literals to new RegExp(pattern, flags) calls.
  * The pattern and flags strings then flow through string array extraction.
+ *
+ * `RegExp` is referenced as a free identifier in the generated
+ * NewExpression. In code that locally shadows the global — notably
+ * lodash's runInContext does `var RegExp = context.RegExp` — `var`
+ * hoisting puts the local binding in scope at the top of the function,
+ * so any injected `new RegExp(...)` that runs before the assignment
+ * sees `undefined` → `TypeError: RegExp is not a constructor`. Capture
+ * the global once at program level and reference that capture instead
+ * when there are regex literals to rewrite.
  */
 export function applyRegexEncoding(ast: any): void {
   const replacements: { node: any; replacement: any }[] = [];
@@ -74,26 +84,31 @@ export function applyRegexEncoding(ast: any): void {
     keys: VISITOR_KEYS,
     enter(node: any) {
       if (node.type !== 'RegExpLiteral') return;
-
-      const pattern = node.pattern;
-      const flags = node.flags || '';
-
-      // Build: new RegExp("pattern", "flags")
-      const args: any[] = [{ type: 'StringLiteral', value: pattern }];
-      if (flags) {
-        args.push({ type: 'StringLiteral', value: flags });
-      }
-
-      const replacement: any = {
-        type: 'NewExpression',
-        callee: { type: 'Identifier', name: 'RegExp' },
-        arguments: args,
-      };
-
-      replacements.push({ node, replacement });
+      replacements.push({ node, replacement: null });
     },
     fallback: 'iteration',
   } as any);
+
+  if (replacements.length === 0) return;
+
+  // Reference a program-level capture of `RegExp` to survive local
+  // shadowing (e.g. lodash runInContext's `var RegExp = context.RegExp`).
+  // captureGlobal injects the `var X = RegExp;` declaration into
+  // ast.program.body on first request.
+  const regexpCaptureName = captureGlobal(ast, 'RegExp');
+
+  for (const entry of replacements) {
+    const node = entry.node;
+    const pattern = node.pattern;
+    const flags = node.flags || '';
+    const args: any[] = [{ type: 'StringLiteral', value: pattern }];
+    if (flags) args.push({ type: 'StringLiteral', value: flags });
+    entry.replacement = {
+      type: 'NewExpression',
+      callee: { type: 'Identifier', name: regexpCaptureName },
+      arguments: args,
+    };
+  }
 
   // Apply replacements by morphing nodes in-place
   for (const { node, replacement } of replacements) {
