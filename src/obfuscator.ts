@@ -10,6 +10,7 @@ import { secondPassHandlers } from './passes/secondPass';
 import { thirdPassHandlers } from './passes/thirdPass';
 import { analyzeScopes, setScopeAnalysis, resetScopeAnalysis } from './scopeAnalysis';
 import { applyClosedObjectRename } from './transforms/closedObjectRename';
+import { applyClosedClassRename } from './transforms/closedClassRename';
 import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
 import { applyOpaquePredicates } from './transforms/opaquePredicates';
 import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
@@ -117,6 +118,29 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     parser: require('recast/parsers/babel'),
   });
 
+  // Closed-* rename transforms run VERY early — before any structural
+  // pre-transform (proxyFunctions in particular) rewrites the shapes
+  // they rely on. proxyFunctions turns `obj.method(a, b)` into a call
+  // through a dispatcher (`_mc(obj, "method", a, b)`) — the
+  // MemberExpression disappears, so closedClassRename's access-site
+  // scan would miss everything. Running these here also means we
+  // don't pay for a pointless scope analysis of the already-renamed
+  // shapes; the main scope analysis that feeds firstPass/secondPass
+  // runs later against the post-pre-transform AST.
+  //
+  //   closedObjectRename: `const obj = {...}` whose refs never escape
+  //   → rename every property key and every `obj.X` access site.
+  //   closedClassRename:  `class Foo {...}` whose binding only sees
+  //   `new Foo()` / `x instanceof Foo` → rename every instance
+  //   method/field and every provably-Foo receiver's `.X` site.
+  //
+  // Both transforms take a ScopeAnalysis purely to identify which
+  // Identifier nodes refer to the same binding; they don't need the
+  // assigned rename strings from that analysis.
+  const earlyAnalysis = analyzeScopes(ast.program);
+  applyClosedObjectRename(ast, earlyAnalysis);
+  applyClosedClassRename(ast, earlyAnalysis);
+
   // Anti-debugging: inject eval("debugger") traps and setInterval loops.
   // Runs before all other transforms so debugger strings get encoded.
   if (budget.maxBloatRatio > 3) {
@@ -169,21 +193,10 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // up by the flat name map. Must run after every transform that
   // introduces identifiers (CFF state vars, proxy dispatchers, etc.) so
   // those are analyzed too, and before firstPass so secondPass can read
-  // the scope-resolved names.
-  const scopeAnalysis = analyzeScopes(ast.program);
-  setScopeAnalysis(scopeAnalysis);
-
-  // Closed-object literal key rename: find `const obj = {...}` bindings
-  // whose references never escape the module (no exports, no passing
-  // obj as an argument, no Object.keys, etc.) and rename every property
-  // name to a fresh Unicode identifier. Runs before firstPass so the
-  // renamed keys flow through the normal identifier pipeline
-  // (propertyKeyEncoding picks them up, stringArray stores the random
-  // renders instead of the original source names). Needs scope
-  // analysis — every reference to the binding must be enumerable, and
-  // renames only apply when every one of those references is a
-  // non-computed member access.
-  applyClosedObjectRename(ast, scopeAnalysis);
+  // the scope-resolved names. A second analysis (separate from the
+  // earlyAnalysis used by the closed-* transforms above) so the rename
+  // pass sees every identifier the pre-transforms have since added.
+  setScopeAnalysis(analyzeScopes(ast.program));
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);
