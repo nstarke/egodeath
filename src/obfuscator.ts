@@ -8,6 +8,7 @@ import { buildConsoleKeywords } from './keywords';
 import { firstPassHandlers } from './passes/firstPass';
 import { secondPassHandlers } from './passes/secondPass';
 import { thirdPassHandlers } from './passes/thirdPass';
+import { analyzeScopes, setScopeAnalysis, resetScopeAnalysis } from './scopeAnalysis';
 import { applyControlFlowFlattening } from './transforms/controlFlowFlattening';
 import { applyOpaquePredicates } from './transforms/opaquePredicates';
 import { applyStringArrayExtraction } from './transforms/stringArrayExtraction';
@@ -101,6 +102,7 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   resetWindowProps();
   resetIssuedNames();
   resetCapturedGlobals();
+  resetScopeAnalysis();
 
   // Strip shebang line if present — parsers can't handle it
   let shebang = '';
@@ -159,6 +161,15 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
     // Comma expression merging
     applyCommaExpressions(ast);
   }
+
+  // Scope analysis: build per-binding rename table so references in
+  // different scopes can pick different renders, and genuine free
+  // references (globals we haven't listed as keywords) don't get swept
+  // up by the flat name map. Must run after every transform that
+  // introduces identifiers (CFF state vars, proxy dispatchers, etc.) so
+  // those are analyzed too, and before firstPass so secondPass can read
+  // the scope-resolved names.
+  setScopeAnalysis(analyzeScopes(ast.program));
 
   // First Pass: catalog identifiers
   runPass(ast, firstPassHandlers);

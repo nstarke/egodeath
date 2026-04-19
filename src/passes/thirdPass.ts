@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { ASTNode, IdentifierNode, PassHandlerMap } from '../types';
 import { gen } from '../random';
 import { Identifier } from '../ast';
+import { getScopeAnalysis } from '../scopeAnalysis';
 
 /**
  * Check if a function's last parameter is a rest element (...args).
@@ -31,14 +32,41 @@ function isAccessor(node: any): boolean {
 
 /**
  * Generate 0-15 random dummy identifier nodes for parameter injection.
+ *
+ * `forbidden`, if supplied, is a set of obfuscated names that are live
+ * in the target function's scope chain. A dummy param sharing a name
+ * with a live binding would shadow every reference to that binding
+ * inside the function body — silent breakage. The Unicode name space
+ * makes collisions astronomically unlikely, but shadowing happens
+ * deterministically when it does, so we reroll on match.
  */
-export function addIdentifiers(): IdentifierNode[] {
+export function addIdentifiers(forbidden?: Set<string>): IdentifierNode[] {
   const len = crypto.randomBytes(1)[0] % 16;
   const result: IdentifierNode[] = [];
   for (let i = 0; i < len; i++) {
-    result.push(Identifier(gen()));
+    let name = gen();
+    // gen() guarantees global uniqueness (no other binding has this
+    // name), but the forbidden set catches names from ancestor scopes
+    // that gen()'s issued-names set already knows about — we re-roll
+    // rather than accept a shadow. Bound the retries for safety.
+    let retries = 0;
+    while (forbidden && forbidden.has(name) && retries < 8) {
+      name = gen();
+      retries++;
+    }
+    result.push(Identifier(name));
   }
   return result;
+}
+
+/**
+ * Obfuscated-name set live in the function's scope chain. Used to
+ * make sure the dummy params we inject don't accidentally shadow a
+ * name the body references.
+ */
+function liveNamesFor(node: any): Set<string> | undefined {
+  const a = getScopeAnalysis();
+  return a ? a.liveNamesByScope.get(node) : undefined;
 }
 
 /**
@@ -60,7 +88,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   FunctionExpression(node: any) {
     // Accessor flag is set by MethodDefinition handler (ESTree shape).
     if (node.__egodeath_accessor) return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
     return node;
   },
 
@@ -72,7 +100,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   AssignmentExpression(node) { return node; },
 
   FunctionDeclaration(node) {
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
     return node;
   },
 
@@ -88,7 +116,7 @@ export const thirdPassHandlers: PassHandlerMap = {
 
   // Modern ES6+ node types
   ArrowFunctionExpression(node) {
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
     return node;
   },
 
@@ -139,7 +167,7 @@ export const thirdPassHandlers: PassHandlerMap = {
 
   ObjectMethod(node) {
     if (isAccessor(node)) return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
     return node;
   },
 
@@ -152,7 +180,7 @@ export const thirdPassHandlers: PassHandlerMap = {
     // on `Foo.length` reflecting the expected constructor arity. Skip to
     // be safe.
     if (node.kind === 'constructor') return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers());
+    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
     return node;
   },
 

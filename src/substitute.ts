@@ -2,12 +2,48 @@ import { ASTNode, GlobalsMap } from './types';
 import { isKeyword } from './keywords';
 import { gen } from './random';
 import { getGlobals, createEntry } from './globals';
+import { getScopeAnalysis } from './scopeAnalysis';
 
 /**
  * Replace an identifier node's name with its obfuscated equivalent.
+ *
+ * Priority order:
+ *   1. Scope-resolved rename — the identifier node was seen by the
+ *      scope analyzer and mapped to a specific binding's render. This
+ *      wins because it's aware of shadowing and scope-local name
+ *      assignment.
+ *   2. Free reference — the analyzer saw this node but found no
+ *      binding. Leaving the name untouched is the only safe choice;
+ *      it's a real global.
+ *   3. Skip-marked — the analyzer flagged this Identifier as a
+ *      non-variable position (property key, label). Leave it alone.
+ *   4. Flat globals map — the legacy name→name table. Used as a
+ *      fallback for identifier nodes synthesized *after* scope analysis
+ *      ran (most structural transforms introduce their own names before
+ *      firstPass, but a few produce fresh nodes during secondPass). The
+ *      fallback keeps those working.
  */
 export function substitute(node: ASTNode | null | undefined, ctx?: GlobalsMap): void {
   if (!node || !node.name || node.name === 'undefined') return;
+
+  const analysis = getScopeAnalysis();
+  if (analysis) {
+    const scoped = analysis.resolvedNames.get(node);
+    if (scoped !== undefined) {
+      if (!node.skipped) node.name = scoped;
+      return;
+    }
+    if (analysis.skipNodes.has(node)) return;
+    // Free references fall through to the flat-globals path below. A
+    // "free reference" here just means "scope analysis didn't find a
+    // binding for this Identifier at pass-2 time" — which also covers
+    // names added to the tree before scope analysis ran but whose
+    // declaration is injected later by flushCapturedGlobals (the
+    // captured-RegExp style). The flat map still has those names
+    // keyed to their final renamed form, so letting the fallback do
+    // the rename is what keeps the declaration and references aligned.
+  }
+
   const isKey = isKeyword(node.name);
   if (!node.skipped && !isKey) {
     const globals = getGlobals();

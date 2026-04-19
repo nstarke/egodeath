@@ -2,6 +2,7 @@ import * as recast from 'recast';
 import { ASTNode, PassHandlerMap } from '../types';
 import { substitute, traverseNodeAddSwap, findNested } from '../substitute';
 import { getGlobals } from '../globals';
+import { copyScopeClassification } from '../scopeAnalysis';
 
 const jsfuck = require('jsfuck').JSFuck;
 
@@ -100,7 +101,10 @@ export const secondPassHandlers: PassHandlerMap = {
     // handlers don't mutate the key by accident.
     if (node.shorthand && node.key && node.value) {
       if (node.value.type === 'Identifier' && node.value.name === node.key.name) {
-        node.value = { type: 'Identifier', name: node.key.name };
+        const orig = node.value;
+        const clone: ASTNode = { type: 'Identifier', name: node.key.name };
+        copyScopeClassification(orig, clone);
+        node.value = clone;
       }
       node.shorthand = false;
     }
@@ -493,7 +497,10 @@ export const secondPassHandlers: PassHandlerMap = {
     // `{renamed = d}`, the lookup miss-targets, and the default fires.
     if (node.shorthand && node.key && node.value) {
       if (node.value.type === 'Identifier' && node.value.name === node.key.name) {
-        node.value = { type: 'Identifier', name: node.key.name };
+        const orig = node.value;
+        const clone: ASTNode = { type: 'Identifier', name: node.key.name };
+        copyScopeClassification(orig, clone);
+        node.value = clone;
       }
       node.shorthand = false;
     }
