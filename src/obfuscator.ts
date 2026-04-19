@@ -29,6 +29,7 @@ import { applyTemplateLiteralFlattening } from './transforms/templateLiteralFlat
 import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
 import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
 import { setStringArrayDecoys, clearStringArrayDecoys } from './transforms/stringArrayExtraction';
+import { buildCrossFilePrelude } from './transforms/crossFileTransplant';
 
 const { minify_sync } = require('terser');
 
@@ -589,6 +590,25 @@ export function obfuscateMultiple(
 
   // Phase 3: set the shared donor pool and obfuscate each file with
   // its file-specific decoy set.
+  //
+  // Before obfuscating each file, we source-level-prepend a
+  // cross-file transplant prelude built from every SIBLING file's
+  // source. The prelude carries:
+  //   (A) live references to sibling string literals (so after
+  //       string-array extraction, sibling-string indexes are
+  //       accessed from live code paths, not just present as inert
+  //       array entries),
+  //   (B) sibling top-level declarations — function bodies, classes,
+  //       var statements — embedded inside an IIFE that sits in an
+  //       opaque-false branch.
+  // Both payloads are unreachable at runtime (the guard is always
+  // false for any integer) but syntactically live, so the
+  // downstream renamer, CFF, opaque-predicate, proxy-function, and
+  // string-array passes process them exactly like real code. The
+  // merged AST for each output now contains every sibling's
+  // function declarations and reachable-string set — dissolving
+  // the "which source did this come from" signal a static reader
+  // (human or LLM) could otherwise use.
   setDonorStatements(allDonors);
   let results: { filename: string; code: string }[];
   try {
@@ -597,9 +617,14 @@ export function obfuscateMultiple(
       const decoys = decoyPool.filter((s) => !own.has(s));
       setStringArrayDecoys(decoys);
       try {
+        const siblingSources = files
+          .filter((_, j) => j !== i)
+          .map((f) => f.code);
+        const prelude = buildCrossFilePrelude(siblingSources);
+        const merged = prelude + file.code;
         return {
           filename: file.filename,
-          code: obfuscate(file.code, options),
+          code: obfuscate(merged, options),
         };
       } finally {
         clearStringArrayDecoys();
