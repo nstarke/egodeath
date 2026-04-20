@@ -59,9 +59,9 @@ interface CaseBlock {
 /**
  * Generate N unique random state IDs.
  */
-function generateStateIds(count: number): number[] {
+function generateStateIds(count: number, exclude: Set<number> = new Set()): number[] {
   const ids: number[] = [];
-  const used = new Set<number>();
+  const used = new Set<number>(exclude);
   while (ids.length < count) {
     const id = crypto.randomBytes(2).readUInt16BE(0) % 10000;
     if (!used.has(id)) {
@@ -487,7 +487,7 @@ export function flattenFunctionBody(body: any[], deadCodeMul: number = 1): any[]
   const templatesPerCase = Math.min(3, Math.max(1, Math.floor(deadCodeMul / 10)));
   // Collect real case bodies for mutation-based dead code (Paper 3)
   const realCaseBodies = cases.filter(c => c.body.length > 1).map(c => c.body);
-  const deadIds = generateStateIds(deadCaseCount);
+  const deadIds = generateStateIds(deadCaseCount, new Set(realStateIds));
   for (const deadId of deadIds) {
     // Generate dead code — will use mutation of real cases ~50% of the time
     const realSource = realCaseBodies.length > 0 ? pick(realCaseBodies) : undefined;
