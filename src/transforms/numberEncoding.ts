@@ -245,8 +245,12 @@ function shouldEncode(value: number): boolean {
  * switch case values that need to be literals, etc.)
  */
 function shouldSkipPosition(node: any, parent: any): boolean {
-  // Switch case test values — some engines optimize literal cases
-  if (parent.type === 'SwitchCase' && parent.test === node) return true;
+  // Switch case test values are intentionally NOT skipped. `case <expr>:` is
+  // legal — the test is evaluated and compared to the discriminant with ===,
+  // so an encoded expression that evaluates to the same integer still matches.
+  // Encoding them defeats the literal-case optimization an analyzer (or engine)
+  // would otherwise get, and keeps CFF state-machine case labels consistent
+  // with the `_s = <state>` assignments, which are already encoded.
   // Object property keys: {3: "value"} — expressions not allowed without []
   if ((parent.type === 'Property' || parent.type === 'ObjectProperty') && parent.key === node) return true;
   // Method/property definitions in classes with numeric keys

@@ -7,3 +7,4 @@ dist-tools
 .adversarial
 .claude
 openai.txt
+logs

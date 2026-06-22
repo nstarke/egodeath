@@ -14,23 +14,26 @@ function extract(code: string): string {
 }
 
 describe('sparse XOR encoding (Paper 9)', () => {
+  // The accessor's local bindings are now generated via gen() (random,
+  // often non-latin identifiers), so these assertions match the invariant
+  // numeric structure rather than the literal `cpos`/`posKey` names.
   it('accessor contains position-dependent key computation', () => {
     const out = extract('var x = "Hello"; var y = "World";');
-    // The accessor should compute posKey using position: cpos * 7 + cpos * cpos * 3
-    expect(out).toContain('cpos * 7');
-    expect(out).toContain('cpos * cpos * 3');
+    // The accessor computes posKey using position: pos * 7 + (pos * pos * 3),
+    // where `pos` is the same generated identifier in all three spots.
+    expect(out).toMatch(/([^\s()]+) \* 7 \+ \(\1 \* \1 \* 3\)/);
   });
 
   it('accessor contains sparse error conditional', () => {
     const out = extract('var x = "Hello"; var y = "World";');
-    // The sparse error pattern: if ((cpos * P) % M < threshold)
-    expect(out).toMatch(/cpos \* \d+\) % \d+ < \d+/);
+    // The sparse error pattern: if ((pos * P) % M < threshold)
+    expect(out).toMatch(/[^\s()]+ \* \d+\) % \d+ < \d+/);
   });
 
   it('accessor contains error seed XOR', () => {
     const out = extract('var x = "Hello"; var y = "World";');
-    // The error XOR: posKey ^ ((errorSeed + cpos * 13) & 255)
-    expect(out).toContain('cpos * 13');
+    // The error XOR: posKey ^ ((errorSeed + pos * 13) & 255)
+    expect(out).toMatch(/[^\s()]+ \* 13\)/);
   });
 
   it('hex-encoded strings differ from uniform XOR', () => {
@@ -57,7 +60,7 @@ describe('sparse XOR encoding (Paper 9)', () => {
     for (let i = 0; i < 10; i++) {
       const out = extract('var x = "test";');
       // Extract the error prime and mod from the accessor code
-      const match = out.match(/cpos \* (\d+)\) % (\d+) < (\d+)/);
+      const match = out.match(/[^\s()]+ \* (\d+)\) % (\d+) < (\d+)/);
       if (match) params.add(match[1] + ',' + match[2] + ',' + match[3]);
     }
     // Should see at least 2 different parameter sets

@@ -19,8 +19,10 @@ describe('chained string decryption (Paper 2)', () => {
     expect(out).toContain('= false');
     // Should contain a for-loop that iterates over the full array
     expect(out).toContain('for (');
-    // Should contain prevKey chain propagation
-    expect(out).toContain('prevKey');
+    // Should contain the rolling-key chain propagation. The decoder's locals
+    // are now generated via gen(), so match the structure rather than the
+    // literal `prevKey`/`k`/`h` names: prevKey = (k ^ h) & 255
+    expect(out).toMatch(/[^\s()]+ = \([^\s()]+ \^ [^\s()]+\) & 255/);
   });
 
   it('chains key derivation through string content hash', () => {
@@ -29,10 +31,11 @@ describe('chained string decryption (Paper 2)', () => {
     applyStringArrayExtraction(ast);
     const out = recast.print(ast).code;
 
+    // Decoder locals are generated via gen(), so match structure not names.
     // Chain derivation: prevKey = (k ^ h) & 255
-    expect(out).toContain('prevKey = (k ^ h) & 255');
-    // Hash accumulation: h = (h + ch) & 255
-    expect(out).toContain('h = (h + ch) & 255');
+    expect(out).toMatch(/[^\s()]+ = \([^\s()]+ \^ [^\s()]+\) & 255/);
+    // Hash accumulation: h = (h + ch) & 255 (same identifier on both sides)
+    expect(out).toMatch(/([^\s()]+) = \(\1 \+ [^\s()]+\) & 255/);
   });
 
   it('stores hex-encoded strings in the array', () => {
@@ -153,8 +156,10 @@ describe('chained decryption in full pipeline', () => {
   it('obfuscated output contains chained decryption', () => {
     const code = 'var msg = "secret"; var key = "hidden";';
     const out = obfuscate(code, { targetTokens: 10000 });
-    // The chained decoder pattern should be present
-    expect(out).toContain('prevKey');
+    // The chained decoder pattern should be present. Locals are generated via
+    // gen(), and full-pipeline output is minified, so match the rolling-key
+    // structure name- and whitespace-agnostically: prevKey = (k ^ h) & 255
+    expect(out).toMatch(/[^\s()^&=]+\s*=\s*\([^\s()^&=]+\s*\^\s*[^\s()^&=]+\)\s*&\s*255/);
     // No readable strings
     expect(out).not.toContain('"secret"');
     expect(out).not.toContain('"hidden"');

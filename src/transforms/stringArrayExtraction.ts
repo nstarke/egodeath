@@ -405,37 +405,56 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   // position-dependent key plus a sparse error pattern — the same
   // encoding applied at build time, reversed at runtime.
 
+  // The accessor's local bindings are generated through gen() too, so the
+  // decoder bootstrap doesn't ship readable names like `prevKey`/`posKey`.
+  // This transform runs AFTER the firstPass/secondPass rename passes, so any
+  // identifier left literal in this template would survive verbatim into the
+  // output. gen() never reissues a name, so these can't collide with the
+  // array/accessor/cache/flag names or with anything the passes assigned; as
+  // function-scoped vars they only need to differ from each other anyway.
+  const idx = gen();        // accessor param (encoded array index)
+  const prevKey = gen();    // rolling chain key
+  const ci = gen();         // outer loop counter (entry index)
+  const k = gen();          // per-entry key
+  const v = gen();          // current encoded hex string
+  const s = gen();          // decoded string accumulator
+  const h = gen();          // running content hash
+  const cpos = gen();       // character position within the entry
+  const j = gen();          // inner loop counter (hex offset)
+  const posKey = gen();     // position-dependent key
+  const ch = gen();         // decoded char code
+
   const accessorCode = `
   var ${cacheName} = {};
   var ${chainDecodedFlag} = false;
-  var ${accessorName} = function(i) {
+  var ${accessorName} = function(${idx}) {
     if (!${chainDecodedFlag}) {
-      var prevKey = ${xorSeed};
-      for (var ci = 0; ci < ${arrayLen}; ci++) {
-        var k = ((prevKey ^ (ci * ${xorPrime})) & 255) || 1;
-        var v = ${arrayName}[ci];
-        var s = "";
-        var h = 0;
-        var cpos = 0;
+      var ${prevKey} = ${xorSeed};
+      for (var ${ci} = 0; ${ci} < ${arrayLen}; ${ci}++) {
+        var ${k} = ((${prevKey} ^ (${ci} * ${xorPrime})) & 255) || 1;
+        var ${v} = ${arrayName}[${ci}];
+        var ${s} = "";
+        var ${h} = 0;
+        var ${cpos} = 0;
         // 4 hex chars per input character — see sparseXorEncode. Changing
         // this stride silently corrupts the whole chain from the first
         // non-latin-1 char onward.
-        for (var j = 0; j < v.length; j += 4) {
-          var posKey = ((k + cpos * 7 + (cpos * cpos * 3)) & 255) || 1;
-          if ((cpos * ${errorPrime}) % ${errorMod} < ${errorThreshold}) {
-            posKey = (posKey ^ ((${errorSeed} + cpos * 13) & 255)) & 255;
+        for (var ${j} = 0; ${j} < ${v}.length; ${j} += 4) {
+          var ${posKey} = ((${k} + ${cpos} * 7 + (${cpos} * ${cpos} * 3)) & 255) || 1;
+          if ((${cpos} * ${errorPrime}) % ${errorMod} < ${errorThreshold}) {
+            ${posKey} = (${posKey} ^ ((${errorSeed} + ${cpos} * 13) & 255)) & 255;
           }
-          var ch = parseInt(v.substr(j, 4), 16) ^ posKey;
-          s += String.fromCharCode(ch);
-          h = (h + ch) & 255;
-          cpos++;
+          var ${ch} = parseInt(${v}.substr(${j}, 4), 16) ^ ${posKey};
+          ${s} += String.fromCharCode(${ch});
+          ${h} = (${h} + ${ch}) & 255;
+          ${cpos}++;
         }
-        ${cacheName}[ci + ${baseOffset}] = s;
-        prevKey = (k ^ h) & 255;
+        ${cacheName}[${ci} + ${baseOffset}] = ${s};
+        ${prevKey} = (${k} ^ ${h}) & 255;
       }
       ${chainDecodedFlag} = true;
     }
-    return ${cacheName}[i];
+    return ${cacheName}[${idx}];
   };`;
 
   const accessorAst = recast.parse(accessorCode, {
