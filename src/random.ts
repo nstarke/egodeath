@@ -3,7 +3,10 @@ import * as crypto from 'crypto';
 const isVarName: (name: string) => boolean = require('is-valid-var-name').es5;
 
 const MIN_NAME_LEN = 6;
-const MAX_NAME_LEN = 16;
+// Widened from 16 to 20 so a reused fragment (up to MAX_FRAGMENT_LEN code
+// points) can sit anywhere in a name and still leave room for surrounding
+// random characters at varying offsets. See the fragment-reuse section below.
+const MAX_NAME_LEN = 20;
 
 /**
  * Unicode ranges that produce valid JavaScript identifier characters.
@@ -36,17 +39,98 @@ function randomFromRanges(ranges: [number, number][]): string {
   return String.fromCodePoint(cp);
 }
 
+/** Uniform integer in [0, n) drawn from crypto bytes. */
+function randInt(n: number): number {
+  if (n <= 1) return 0;
+  return crypto.randomBytes(2).readUInt16BE(0) % n;
+}
+
 /**
- * Generate a random Unicode string of 6-16 characters using code points
- * from known-valid identifier ranges.
+ * Build a purely-random identifier of `len` code points. Every code point
+ * comes from ID_START_RANGES, all of which are valid identifier *start*
+ * characters, so the result is a valid identifier regardless of which
+ * position any given character lands in.
  */
-export function mkStr(): string {
-  const len = (crypto.randomBytes(1)[0] % (MAX_NAME_LEN - MIN_NAME_LEN + 1)) + MIN_NAME_LEN;
+function randomName(len: number): string {
   let val = randomFromRanges(ID_START_RANGES);
   for (let i = 1; i < len; i++) {
     val += randomFromRanges(ID_START_RANGES);
   }
   return val;
+}
+
+// --- Fragment reuse --------------------------------------------------------
+//
+// To make obfuscated identifiers look related — and therefore harder to tell
+// apart, both for a human skimming the output and for a model tokenizing it —
+// every name we hand out donates a substring (> 4 code points) to a shared
+// store, and most subsequent names splice one of those stored substrings back
+// in. The reused chunk is placed at a *randomly chosen offset* each time, so
+// shared material is never anchored to a fixed column: two names that share a
+// fragment won't line up positionally, which defeats naive prefix/suffix
+// grouping and makes the recurring chunk much less obvious.
+//
+// All ID_START_RANGES code points are single UTF-16 units (every range tops
+// out below U+10000), so we can index names by character without worrying
+// about surrogate pairs.
+
+// Substrings of length 4 and up (greater-than-4 inclusive).
+const MIN_FRAGMENT_LEN = 4;
+const MAX_FRAGMENT_LEN = 9;
+// Probability that a freshly generated name embeds a previously seen fragment.
+const FRAGMENT_REUSE_PROB = 0.7;
+// Cap on the fragment store so a huge bundle can't grow it without bound; the
+// oldest entries rotate out once we exceed this.
+const MAX_FRAGMENTS = 512;
+
+const fragments: string[] = [];
+
+/**
+ * Carve a random substring (length in [MIN_FRAGMENT_LEN, MAX_FRAGMENT_LEN],
+ * clamped to the name's length) out of `name` and remember it for reuse in
+ * later names. Called only for names we actually hand out, so the store stays
+ * free of fragments from rejected candidates.
+ */
+function recordFragment(name: string): void {
+  const chars = [...name];
+  if (chars.length < MIN_FRAGMENT_LEN) return;
+  const maxLen = Math.min(MAX_FRAGMENT_LEN, chars.length);
+  const fragLen = MIN_FRAGMENT_LEN + randInt(maxLen - MIN_FRAGMENT_LEN + 1);
+  const start = randInt(chars.length - fragLen + 1);
+  fragments.push(chars.slice(start, start + fragLen).join(''));
+  if (fragments.length > MAX_FRAGMENTS) fragments.shift();
+}
+
+/**
+ * Clear the fragment store. Folded into resetIssuedNames() so each
+ * obfuscate() run starts with no carried-over fragments.
+ */
+export function resetFragments(): void {
+  fragments.length = 0;
+}
+
+/**
+ * Generate a random Unicode identifier of 6-20 code points from known-valid
+ * identifier ranges. When the fragment store is non-empty, with probability
+ * FRAGMENT_REUSE_PROB the name embeds a previously seen substring at a random
+ * offset — the name is lengthened beyond the rolled length if needed so the
+ * fragment plus at least one surrounding random character fit.
+ */
+export function mkStr(): string {
+  const len = MIN_NAME_LEN + randInt(MAX_NAME_LEN - MIN_NAME_LEN + 1);
+
+  if (fragments.length > 0 && crypto.randomBytes(1)[0] < FRAGMENT_REUSE_PROB * 256) {
+    const frag = [...fragments[randInt(fragments.length)]];
+    // Ensure room for the fragment plus >=1 random char, capped at MAX.
+    const finalLen = Math.min(MAX_NAME_LEN, Math.max(len, frag.length + 1));
+    const chars = [...randomName(finalLen)];
+    // Splice the fragment in at a random offset that keeps it fully inside.
+    const insertAt = randInt(finalLen - frag.length + 1);
+    for (let i = 0; i < frag.length; i++) chars[insertAt + i] = frag[i];
+    return chars.join('');
+  }
+
+  return randomName(len);
 }
 
 /**
@@ -136,6 +220,10 @@ export function generateSharedNamePool(size: number): string[] {
       if (seen.has(name)) continue;
       seen.add(name);
       pool.push(name);
+      // Donate a fragment so later pool entries can reuse it. Because the
+      // pool is built once and then replayed identically for every file in a
+      // batch, this keeps the shared-name path deterministic across files.
+      recordFragment(name);
       filled = true;
       break;
     }
@@ -162,11 +250,12 @@ const MAX_COLLISION_RETRIES = 32;
  */
 export function resetIssuedNames(): void {
   issuedNames.clear();
+  resetFragments();
 }
 
 /**
  * Generate a valid, unique random variable name using Unicode characters.
- * Names are 6-16 code points long, drawn from dense Unicode ranges that are
+ * Names are 6-20 code points long, drawn from dense Unicode ranges that are
  * valid JavaScript identifiers. Uniqueness is guaranteed within a single
  * obfuscate() call by tracking every issued name.
  *
@@ -195,6 +284,7 @@ export function gen(): string {
     while (!isVarName(name)) name = mkStr();
     if (!issuedNames.has(name)) {
       issuedNames.add(name);
+      recordFragment(name);
       return name;
     }
   }
@@ -211,6 +301,7 @@ export function gen(): string {
     counter++;
   }
   issuedNames.add(base);
+  recordFragment(base);
   return base;
 }
 
