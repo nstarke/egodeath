@@ -122,30 +122,80 @@ const PRIME_INTERVALS = [
 function buildSetIntervalDebugger(ast: any): any {
   const interval = PRIME_INTERVALS[randInt(0, PRIME_INTERVALS.length - 1)];
 
+  const setIntervalCall = {
+    type: 'CallExpression',
+    callee: id('setInterval'),
+    arguments: [
+      {
+        type: 'FunctionExpression',
+        id: null,
+        params: [],
+        body: {
+          type: 'BlockStatement',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'CallExpression',
+              callee: id('eval'),
+              arguments: [buildEncodedDebuggerString(ast)],
+            },
+          }],
+        },
+      },
+      num(interval),
+    ],
+  };
+
+  // unref() the timer handle so it doesn't keep a Node.js process alive.
+  // Without this, the injected traps pin the event loop open forever: a
+  // library obfuscated with anti-debug hangs its host (CLIs never exit,
+  // `tape`/`tap` test runners time out reporting "no plan" even though every
+  // assertion passed). In a browser the handle is a plain number with no
+  // `.unref`, so the guarded call is a no-op there. unref() does NOT stop the
+  // timer — the debugger traps still fire while the program has real work
+  // pending — it only stops the timer from being the sole reason to stay up.
+  //
+  //   (function (h) { if (h && h.unref) h.unref(); })(setInterval(fn, t));
+  const handle = gen();
+  const handleRef = () => id(handle);
+  const unrefMember = () => ({
+    type: 'MemberExpression',
+    object: handleRef(),
+    property: id('unref'),
+    computed: false,
+  });
+
   return {
     type: 'ExpressionStatement',
     expression: {
       type: 'CallExpression',
-      callee: id('setInterval'),
-      arguments: [
-        {
-          type: 'FunctionExpression',
-          id: null,
-          params: [],
-          body: {
-            type: 'BlockStatement',
-            body: [{
+      callee: {
+        type: 'FunctionExpression',
+        id: null,
+        params: [handleRef()],
+        body: {
+          type: 'BlockStatement',
+          body: [{
+            type: 'IfStatement',
+            test: {
+              type: 'LogicalExpression',
+              operator: '&&',
+              left: handleRef(),
+              right: unrefMember(),
+            },
+            consequent: {
               type: 'ExpressionStatement',
               expression: {
                 type: 'CallExpression',
-                callee: id('eval'),
-                arguments: [buildEncodedDebuggerString(ast)],
+                callee: unrefMember(),
+                arguments: [],
               },
-            }],
-          },
+            },
+            alternate: null,
+          }],
         },
-        num(interval),
-      ],
+      },
+      arguments: [setIntervalCall],
     },
   };
 }

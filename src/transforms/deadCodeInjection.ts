@@ -636,9 +636,22 @@ function generateMutatedCode(realStatements: any[]): any[] {
   const startIdx = randInt(0, Math.max(0, realStatements.length - sliceLen));
   const slice = realStatements.slice(startIdx, startIdx + sliceLen);
 
-  // Clone and mutate with a fresh name mapping
-  const nameMap = new Map<string, string>();
-  const mutated = slice.map(stmt => mutateNode(stmt, nameMap));
+  // Clone and mutate each statement with its OWN name mapping. A single map
+  // shared across the slice would rename two same-named bindings from
+  // different donor statements to the SAME fresh name — and `e`, `t`, `n`,
+  // `r`, etc. are distinct bindings in countless separate scopes across a
+  // minified bundle. Two such statements would then emit `const X`/`let X`
+  // twice in one block: "Identifier 'X' has already been declared". Per
+  // statement maps keep every donor's bindings distinct; cross statement
+  // references (which the shared map used to keep linked) instead resolve
+  // against the synthetic `var` prelude emitted below.
+  const newNames = new Set<string>();
+  const mutated = slice.map(stmt => {
+    const stmtMap = new Map<string, string>();
+    const out = mutateNode(stmt, stmtMap);
+    for (const v of stmtMap.values()) newNames.add(v);
+    return out;
+  });
 
   // Collect names that are already declared inside the mutated statements
   // (as VariableDeclarators or FunctionDeclaration/ClassDeclaration ids).
@@ -650,9 +663,13 @@ function generateMutatedCode(realStatements: any[]): any[] {
   const declaredInSlice = new Set<string>();
   collectDeclaredNames(mutated, declaredInSlice);
 
-  // Wrap in a var declaration block so the fresh variables are declared
+  // Wrap in a var declaration block so the fresh variables are declared.
+  // Every fresh name that isn't itself a binding in the slice (i.e. it only
+  // appears in reference position, including cross statement references
+  // broken by the per statement maps above) gets a backing `var` so the
+  // dead code has no undeclared identifiers.
   const varDecls: any[] = [];
-  for (const [, newName] of nameMap) {
+  for (const newName of newNames) {
     if (declaredInSlice.has(newName)) continue;
     varDecls.push({
       type: 'VariableDeclaration',
