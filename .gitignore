@@ -4,5 +4,6 @@ dist
 dist-tools
 .tmp-packages
 .benchmark
+.adversarial
 .claude
 openai.txt

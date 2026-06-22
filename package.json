@@ -10,7 +10,8 @@
     "obfuscate": "node dist/index.js",
     "obfuscate-package": "ts-node --project tools/tsconfig.json tools/obfuscate-package.ts",
     "benchmark": "ts-node --project tools/tsconfig.json tools/benchmark.ts",
-    "detect-obfuscation": "ts-node --project tools/tsconfig.json tools/obfuscation-detection-test.ts"
+    "detect-obfuscation": "ts-node --project tools/tsconfig.json tools/obfuscation-detection-test.ts",
+    "adversarial-test": "ts-node --project tools/tsconfig.json tools/adversarial-test.ts"
   },
   "author": "",
   "license": "MIT",
@@ -32,6 +33,7 @@
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
+    "webcrack": "^2.16.0",
     "webpack": "^5.105.4",
     "webpack-cli": "^7.0.2"
   }

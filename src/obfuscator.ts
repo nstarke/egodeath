@@ -446,6 +446,16 @@ function collectDonorStatements(code: string): any[] {
     keys: EXTRA_VISITOR_KEYS,
     enter(node: any) {
       if (!SIMPLE_TYPES.has(node.type)) return;
+      // A `const` declarator with no initializer (`const x`) is only legal
+      // as the head of a for-in/for-of loop — emitted as a standalone dead-
+      // code statement it's `SyntaxError: Missing initializer in const
+      // declaration`. estraverse visits the loop-head declaration as its own
+      // VariableDeclaration node, so guard against collecting it. (`var x;`
+      // and `let x;` are valid standalone, so only `const` needs the check.)
+      if (node.type === 'VariableDeclaration' && node.kind === 'const' &&
+          node.declarations.some((d: any) => d.init == null)) {
+        return;
+      }
       // Reject-but-recurse: countNodesBounded is O(MAX_DONOR_NODES)
       // so the extra work is small, and by continuing traversal we
       // still collect small simple statements nested inside giant
