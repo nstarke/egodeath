@@ -476,6 +476,64 @@ function deployBundle(mainEntry: string, repoDir: string, code: string): void {
 }
 
 /**
+ * If a package's tests drive real browsers through Playwright (e.g. axios's
+ * vitest browser projects), download the browser binaries so those tests can
+ * launch. The browsers land in a shared per-user cache, so this is a no-op
+ * after the first install for a given Playwright version. System libraries
+ * the browsers need (e.g. WebKit's libwoff1) still require a one-time
+ * `sudo npx playwright install-deps`; we only fetch the browsers here.
+ */
+function installPlaywrightBrowsers(repoDir: string): void {
+  const hasPlaywright = fs.existsSync(path.join(repoDir, 'node_modules', 'playwright-core'))
+    || fs.existsSync(path.join(repoDir, 'node_modules', 'playwright'))
+    || fs.existsSync(path.join(repoDir, 'node_modules', '@playwright', 'test'));
+  if (!hasPlaywright) return;
+
+  const warn = (label: string, e: any) => {
+    const detail = (e.stderr?.toString() || e.message || '').split('\n')
+      .map((l: string) => l.trim()).filter(Boolean).slice(0, 3).join(' | ');
+    console.log(`  (${label}: ${detail})`);
+  };
+
+  console.log(`  Playwright detected — updating driver and installing browsers...`);
+
+  // A package may lock an older Playwright that predates the host OS and
+  // refuses to download browsers ("Playwright does not support chromium on
+  // ubuntu26.04-x64"). Bump just the browser driver to the latest 1.x so it
+  // recognizes the OS — this touches test-time tooling only, not the
+  // obfuscated bundle under test.
+  try {
+    execSync('npm install playwright@latest playwright-core@latest --no-save --ignore-scripts', {
+      cwd: repoDir,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: 300000,
+    });
+  } catch (e: any) {
+    warn('playwright update warning', e);
+  }
+
+  try {
+    execSync('npx playwright install', {
+      cwd: repoDir,
+      // Ignore stdout (the installer streams 100+ MB of download progress,
+      // blowing execSync's 1 MB default maxBuffer) but capture stderr so a
+      // genuine failure is diagnosable.
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: 600000,
+      env: {
+        ...process.env,
+        // Don't let a missing-host-library check (which needs sudo to fix)
+        // abort the browser download with a non-zero exit.
+        PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1',
+      },
+    });
+  } catch (e: any) {
+    // Non-fatal: a browser that can't be fetched/run just fails its own tests.
+    warn('playwright install warning', e);
+  }
+}
+
+/**
  * Phase 3: Deploy obfuscated code and run the package's test suite.
  */
 function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDir: string): void {
@@ -506,14 +564,21 @@ function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDi
     console.log(`  Running tests for ${safeName}...`);
     console.log(`  Test command: ${testCmd}`);
     const binDir = path.join(repoDir, 'node_modules', '.bin');
+    installPlaywrightBrowsers(repoDir);
     try {
       const testOutput = execSync(testCmd, {
         cwd: repoDir,
         stdio: 'pipe',
-        timeout: 120000,
+        timeout: 600000,
+        // Big suites (axios runs 1650 tests across 3 browsers) print well past
+        // execSync's 1 MB default, which would otherwise throw a false failure.
+        maxBuffer: 64 * 1024 * 1024,
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          // Force headless browser launches (vitest/playwright check CI) so
+          // browser-driven suites (axios) don't need a display.
+          CI: 'true',
           // Stripped test commands run binaries (ava, c8, ...) directly.
           PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
         },
