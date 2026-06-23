@@ -53,7 +53,43 @@ function getRepoUrl(packageName: string): string | null {
 }
 
 /**
- * Find the main entry point of a package.
+ * Resolve a relative path against the repo, accepting a missing `.js`.
+ */
+function resolveEntryFile(repoDir: string, rel: string): string | null {
+  const resolved = path.resolve(repoDir, rel);
+  if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) return resolved;
+  if (fs.existsSync(resolved + '.js')) return resolved + '.js';
+  return null;
+}
+
+/**
+ * Pull a file path out of an `exports` value, which may be a bare string or a
+ * conditional object ({ node, require, import, default, ... }). Prefers
+ * Node/CommonJS conditions, then falls back to whatever resolves.
+ */
+function resolveExportsTarget(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    // `types` points at .d.ts files, never a runtime entry — skip it.
+    for (const cond of ['node', 'require', 'default', 'import', 'module', 'browser']) {
+      if (cond in obj) {
+        const target = resolveExportsTarget(obj[cond]);
+        if (target) return target;
+      }
+    }
+    for (const [key, v] of Object.entries(obj)) {
+      if (key === 'types') continue;
+      const target = resolveExportsTarget(v);
+      if (target) return target;
+    }
+  }
+  return null;
+}
+
+/**
+ * Find the main entry point of a package, checking `main`, the `.` entry of the
+ * `exports` map, the `module` field, then a root index.js.
  */
 function findMainEntry(repoDir: string): string | null {
   const pkgJsonPath = path.join(repoDir, 'package.json');
@@ -61,18 +97,30 @@ function findMainEntry(repoDir: string): string | null {
 
   const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
 
-  // Try main, then index.js
-  for (const field of ['main']) {
-    const entry = pkgJson[field];
-    if (entry && typeof entry === 'string') {
-      const resolved = path.resolve(repoDir, entry);
-      if (fs.existsSync(resolved)) return resolved;
-      // Try with .js extension
-      if (fs.existsSync(resolved + '.js')) return resolved + '.js';
+  // 1. `main` field
+  if (typeof pkgJson.main === 'string') {
+    const resolved = resolveEntryFile(repoDir, pkgJson.main);
+    if (resolved) return resolved;
+  }
+
+  // 2. `exports` map — many ESM-only packages (e.g. uuid) drop `main` entirely
+  if (pkgJson.exports) {
+    const dot = typeof pkgJson.exports === 'string'
+      ? pkgJson.exports
+      : resolveExportsTarget(pkgJson.exports['.'] ?? pkgJson.exports);
+    if (dot) {
+      const resolved = resolveEntryFile(repoDir, dot);
+      if (resolved) return resolved;
     }
   }
 
-  // Fallback: index.js
+  // 3. `module` field (ESM entry)
+  if (typeof pkgJson.module === 'string') {
+    const resolved = resolveEntryFile(repoDir, pkgJson.module);
+    if (resolved) return resolved;
+  }
+
+  // 4. Fallback: index.js
   const indexJs = path.join(repoDir, 'index.js');
   if (fs.existsSync(indexJs)) return indexJs;
 
@@ -102,38 +150,10 @@ function webpackBundle(repoDir: string, entryPath: string, outputPath: string): 
     }
   }
 
-  const webpackConfig: any = {
-    mode: 'none',
-    target: 'node',
-    entry: entryPath,
-    output: {
-      path: path.dirname(outputPath),
-      filename: path.basename(outputPath),
-      libraryTarget: 'commonjs2',
-    },
-    resolve: {
-      extensions: ['.js', '.mjs', '.cjs', '.json', '.node'],
-      mainFields: ['main', 'module'],
-      alias: aliases,
-    },
-    module: {
-      rules: [{
-        test: /\.mjs$/,
-        type: 'javascript/auto',
-      }],
-    },
-    experiments: {
-      // Enable support for ESM
-      outputModule: false,
-    },
-    externals: [
-      /\.node$/,
-      'bufferutil',
-      'utf-8-validate',
-    ],
-  };
-
-  const configPath = path.join(repoDir, '_webpack.config.js');
+  // Use a .cjs extension so the config is always loaded as CommonJS. Packages
+  // with "type": "module" (chalk, commander, axios, ...) would otherwise make
+  // webpack-cli parse this `module.exports = ...` file as ESM and fail to load.
+  const configPath = path.join(repoDir, '_webpack.config.cjs');
   // Write as JS (not JSON) so regex externals are preserved
   const aliasStr = Object.keys(aliases).length > 0
     ? JSON.stringify(aliases, null, 2)
@@ -175,6 +195,51 @@ function webpackBundle(repoDir: string, entryPath: string, outputPath: string): 
 }
 
 /**
+ * Binaries that lint or type-check rather than run tests. Obfuscated output
+ * is intentionally un-lintable (mangled names, reformatted, encoded strings),
+ * so running these against it produces noise failures unrelated to whether the
+ * obfuscation preserved behavior.
+ */
+const LINT_BINARIES = new Set([
+  'xo', 'eslint', 'tslint', 'jshint', 'jscs', 'standard', 'semistandard',
+  'prettier', 'biome', 'rome', 'stylelint', 'dtslint', 'tsd', 'flow',
+  'lockfile-lint', 'publint', 'tsc',
+]);
+
+/** npm-script names (the `X` in `npm run X`) that lint or type-check. */
+const LINT_SCRIPT_RE = /^(lint|xo|prettier|format|style|check|checks|typecheck|type-check|types|tsc|tsd|dtslint|flow)(:.*)?$/;
+
+/**
+ * True if a single `&&`-separated command segment lints/type-checks rather
+ * than running tests.
+ */
+function isLintSegment(seg: string): boolean {
+  const tokens = seg.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  if ((tokens[0] === 'npm' || tokens[0] === 'pnpm' || tokens[0] === 'yarn') &&
+      (tokens[1] === 'run' || tokens[1] === 'run-script')) {
+    return LINT_SCRIPT_RE.test(tokens[2] || '');
+  }
+  // Direct binary: skip `VAR=val` and cross-env/env prefixes to reach the
+  // actual command, then match its basename.
+  let i = 0;
+  while (i < tokens.length &&
+    (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || tokens[i] === 'cross-env' || tokens[i] === 'env')) {
+    i++;
+  }
+  return LINT_BINARIES.has(path.basename(tokens[i] || ''));
+}
+
+/** Drop lint/type-check segments from an `a && b && c` test script. */
+function stripLintSegments(testScript: string): string {
+  return testScript
+    .split('&&')
+    .map(s => s.trim())
+    .filter(s => s && !isLintSegment(s))
+    .join(' && ');
+}
+
+/**
  * Figure out the right command to run just the tests, skipping linters.
  */
 function resolveTestCommand(pkgJson: any): string | null {
@@ -188,6 +253,16 @@ function resolveTestCommand(pkgJson: any): string | null {
   const testOnlyKeys = ['tests-only', 'test:unit', 'test-only', 'unit', 'test:run'];
   for (const key of testOnlyKeys) {
     if (scripts[key]) return `npm run ${key}`;
+  }
+
+  // Strip linters / type-checkers chained into the test script (e.g. chalk's
+  // `xo && c8 ava && tsd`, commander's `node --test && npm run check:type:ts`).
+  const stripped = stripLintSegments(testScript);
+  if (stripped !== testScript.trim()) {
+    // Something was removed — run only the real test command(s) directly.
+    // deployAndTest puts node_modules/.bin on PATH. Running directly also
+    // skips pre/posttest, so a `pretest: build` can't clobber the deploy.
+    return stripped.length > 0 ? stripped : null;
   }
 
   if (scripts.pretest || scripts.posttest) {
@@ -290,8 +365,12 @@ function preparePackage(packageName: string, tempDir: string): { prepared?: Prep
     const output = stdout + '\n' + stderr;
 
     const errorLines = output.split('\n').filter((l: string) =>
-      l.includes('ERROR') || l.includes('Module not found') || l.includes('Can\'t resolve'));
-    report.bundleError = errorLines[0]?.trim() || e.message.split('\n')[0];
+      l.includes('ERROR') || l.includes('Module not found') || l.includes('Can\'t resolve')
+      || l.includes('Failed to load') || l.includes('SyntaxError') || l.includes('Error:'));
+    // Fall back to the last non-empty output lines so the real webpack/config
+    // error is captured instead of just "Command failed: ...webpack --config".
+    const fallback = output.split('\n').map((l: string) => l.trim()).filter(Boolean).slice(-5);
+    report.bundleError = errorLines[0]?.trim() || fallback.join(' | ') || e.message.split('\n')[0];
     console.log(`  \u2717 Bundle failed: ${(report.bundleError || '').substring(0, 120)}`);
     errorLines.slice(1, 4).forEach((l: string) =>
       console.log(`    ${l.trim().substring(0, 120)}`));
@@ -304,6 +383,96 @@ function preparePackage(packageName: string, tempDir: string): { prepared?: Prep
     prepared: { packageName, safeName, repoDir, mainEntry, bundlePath, bundleSource, report },
     report,
   };
+}
+
+/**
+ * Whether an entry file is interpreted as an ES module. `.mjs` always is and
+ * `.cjs` never is; a `.js` file is ESM only when its nearest enclosing
+ * package.json declares `"type": "module"`. The obfuscated bundle is CommonJS
+ * (`module.exports = ...`), so writing it into an ESM-scoped entry would throw
+ * `module is not defined` on import — those need the shim path below.
+ */
+function isEsmScoped(entryPath: string, repoDir: string): boolean {
+  const ext = path.extname(entryPath);
+  if (ext === '.mjs') return true;
+  if (ext === '.cjs') return false;
+
+  const root = path.resolve(repoDir);
+  let dir = path.dirname(entryPath);
+  while (true) {
+    const pj = path.join(dir, 'package.json');
+    if (fs.existsSync(pj)) {
+      try {
+        return JSON.parse(fs.readFileSync(pj, 'utf-8')).type === 'module';
+      } catch {
+        return false;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (dir === root || parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
+
+/**
+ * Enumerate the runtime export keys of a CommonJS bundle by requiring it in a
+ * throwaway child process (so the obfuscated module's side effects — console
+ * stubs, anti-debug probes — don't leak into this process). Returns [] on any
+ * failure; the shim then exposes only the default export.
+ */
+function extractExportKeys(cjsPath: string): string[] {
+  try {
+    const script = `const m=require(${JSON.stringify(cjsPath)});` +
+      `const k=(m&&typeof m==="object")?Object.keys(m):[];` +
+      `process.stdout.write(JSON.stringify(k))`;
+    const out = execSync(`node -e ${JSON.stringify(script)}`, {
+      stdio: 'pipe',
+      timeout: 30000,
+    }).toString();
+    return JSON.parse(out);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build an ESM shim that re-exports a CommonJS bundle's surface, so an
+ * ESM-scoped entry (`"type": "module"`) can serve the obfuscated CJS bundle.
+ */
+function buildEsmShim(cjsRelPath: string, keys: string[]): string {
+  const named = keys.filter(k =>
+    k !== 'default' && k !== '__esModule' && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k));
+  const lines = [
+    `import __obf from ${JSON.stringify(cjsRelPath)};`,
+    `export default (__obf && __obf.__esModule && 'default' in __obf) ? __obf.default : __obf;`,
+  ];
+  if (named.length > 0) {
+    lines.push(`export const { ${named.join(', ')} } = __obf;`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Write the obfuscated bundle over a package's entry point. For CommonJS-scoped
+ * entries the bundle is written directly; for ESM-scoped entries the bundle is
+ * written to a sibling `.cjs` file and the entry becomes an ESM re-export shim.
+ */
+function deployBundle(mainEntry: string, repoDir: string, code: string): void {
+  fs.copyFileSync(mainEntry, mainEntry + '.orig');
+
+  if (!isEsmScoped(mainEntry, repoDir)) {
+    fs.writeFileSync(mainEntry, code, 'utf-8');
+    return;
+  }
+
+  const dir = path.dirname(mainEntry);
+  const base = path.basename(mainEntry, path.extname(mainEntry));
+  const cjsName = `${base}.__obf.cjs`;
+  fs.writeFileSync(path.join(dir, cjsName), code, 'utf-8');
+  const keys = extractExportKeys(path.join(dir, cjsName));
+  fs.writeFileSync(mainEntry, buildEsmShim(`./${cjsName}`, keys), 'utf-8');
+  console.log(`  ESM package: deployed CJS bundle + shim (${keys.length} exports)`);
 }
 
 /**
@@ -326,9 +495,9 @@ function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDi
   // check console output. The obfuscation is still valid without them.
   const stripped = obfuscatedCode.replace(/console\.\w+\s*=\s*function\s*\(\)\s*\{\s*\}\s*;?\n?/g, '');
 
-  // Replace the main entry with the obfuscated bundle
-  fs.copyFileSync(mainEntry, mainEntry + '.orig');
-  fs.writeFileSync(mainEntry, stripped, 'utf-8');
+  // Replace the main entry with the obfuscated bundle (CJS-direct, or an ESM
+  // shim wrapping a sibling .cjs for "type": "module" packages).
+  deployBundle(mainEntry, repoDir, stripped);
 
   // Run the package's test suite against the obfuscated bundle
   const pkgJson = JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf-8'));
@@ -336,12 +505,18 @@ function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDi
   if (testCmd) {
     console.log(`  Running tests for ${safeName}...`);
     console.log(`  Test command: ${testCmd}`);
+    const binDir = path.join(repoDir, 'node_modules', '.bin');
     try {
       const testOutput = execSync(testCmd, {
         cwd: repoDir,
         stdio: 'pipe',
         timeout: 120000,
-        env: { ...process.env, NODE_ENV: 'test' },
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          // Stripped test commands run binaries (ava, c8, ...) directly.
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+        },
       }).toString();
       report.tests = { ran: true, passed: true, output: testOutput };
       console.log(`  \u2713 Tests PASSED`);

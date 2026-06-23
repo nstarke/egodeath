@@ -311,6 +311,59 @@ describe('regression: ArrowFunctionExpression with Identifier body', () => {
   });
 });
 
+describe('regression: ThrowStatement argument is substituted', () => {
+  // Like the Identifier-body arrow above, the ThrowStatement handler in
+  // secondPass was a no-op, so `throw NAME` left NAME un-renamed while the
+  // binding was renamed everywhere else → ReferenceError at runtime. This
+  // hit commander's default exitOverride callback `(err) => { ... throw err }`.
+  // (passes/secondPass.ts)
+  it('a thrown reference to a renamed binding still resolves', () => {
+    const code = `
+      function guard(value) {
+        const failure = new Error("boom");
+        failure.code = "E_BOOM";
+        if (value !== "ok") {
+          throw failure;
+        }
+        return value;
+      }
+      module.exports = function (value) {
+        try {
+          return guard(value);
+        } catch (e) {
+          return e.code;
+        }
+      };
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(mod('ok')).toBe('ok');
+    expect(mod('bad')).toBe('E_BOOM');
+  });
+
+  it('a thrown arrow parameter still resolves', () => {
+    const code = `
+      function makeThrower() {
+        return (err) => {
+          if (err.code !== 'skip') {
+            throw err;
+          }
+          return 'skipped';
+        };
+      }
+      module.exports = function (input) {
+        try {
+          return makeThrower()(input);
+        } catch (e) {
+          return 'threw:' + e.code;
+        }
+      };
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(mod({ code: 'skip' })).toBe('skipped');
+    expect(mod({ code: 'X' })).toBe('threw:X');
+  });
+});
+
 describe('regression: opaquePredicates Math.random probe survives local Math shadowing', () => {
   // lodash's runInContext does `var Math = context.Math` which hoists
   // Math into the function scope. A probe calling `Math.random()` at

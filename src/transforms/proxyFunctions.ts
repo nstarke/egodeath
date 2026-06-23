@@ -83,6 +83,16 @@ function shouldProxy(
   // Skip super calls
   if (callee.type === 'Super') return false;
 
+  // Skip super method/property calls: `super.m(x)` would become
+  // `methodProxy(super, "m", x)`, putting bare `super` in an argument
+  // position — a hard SyntaxError ("'super' can only be used with
+  // function calls or in property accesses"). `super` is only legal as
+  // `super()` or `super.prop`/`super[prop]`, never standalone.
+  if ((callee.type === 'MemberExpression' || callee.type === 'OptionalMemberExpression')
+      && callee.object && callee.object.type === 'Super') {
+    return false;
+  }
+
   // Skip tagged template expressions (they have a special calling convention)
   if (parent.type === 'TaggedTemplateExpression') return false;
 

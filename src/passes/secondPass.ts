@@ -268,7 +268,14 @@ export const secondPassHandlers: PassHandlerMap = {
     return node;
   },
 
-  ThrowStatement(node) { return node; },
+  ThrowStatement(node) {
+    // `throw <expr>` — the thrown expression is a normal value position and
+    // must be renamed/encoded like a return argument. Without this, a thrown
+    // reference to a renamed binding (e.g. `throw err` where `err` was renamed
+    // everywhere else) is left bare and becomes a ReferenceError at runtime.
+    substitute(node.argument);
+    return node;
+  },
   Directive(node) { return node; },
 
   DoWhileStatement(node) {

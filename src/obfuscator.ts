@@ -375,6 +375,56 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
 const MAX_DONOR_NODES = 40;
 
 /**
+ * AST node types that are only legal inside a specific enclosing
+ * construct: `super` needs a derived constructor / method, `await` an
+ * async function, `yield` a generator, and `new.target` / `import.meta`
+ * (both MetaProperty) a function or module scope. A cross-file donor
+ * statement is cloned into arbitrary contexts (a dead switch case in
+ * another file's plain function, etc.), so any statement carrying one
+ * of these would produce a hard SyntaxError like `'super' keyword
+ * unexpected here`. Reject such statements from the donor pool.
+ */
+const CONTEXT_BOUND_NODE_TYPES = new Set([
+  'Super',
+  'AwaitExpression',
+  'YieldExpression',
+  'MetaProperty',
+]);
+
+/**
+ * Bounded scan for context-bound constructs (see CONTEXT_BOUND_NODE_TYPES).
+ * Walks the donor subtree — already capped at MAX_DONOR_NODES, so this is
+ * cheap — and returns true as soon as one is found. Conservative: a `super`
+ * nested in the donor's own class method is self-contained and would survive
+ * relocation, but rejecting it too only costs us one donor candidate.
+ */
+function hasContextBoundConstruct(node: any): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const stack: any[] = [node];
+  while (stack.length > 0) {
+    const n = stack.pop();
+    if (n && typeof n === 'object' && typeof n.type === 'string' &&
+        CONTEXT_BOUND_NODE_TYPES.has(n.type)) {
+      return true;
+    }
+    for (const key of Object.keys(n)) {
+      if (key === 'loc' || key === 'start' || key === 'end' ||
+          key === 'extra' || key === 'comments' || key === 'leadingComments' ||
+          key === 'trailingComments' || key === 'innerComments' || key === 'range') {
+        continue;
+      }
+      const v = n[key];
+      if (Array.isArray(v)) {
+        for (const vv of v) if (vv && typeof vv === 'object') stack.push(vv);
+      } else if (v && typeof v === 'object') {
+        stack.push(v);
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Cheap size check: count AST descendants up to `limit`. Returns the
  * count (capped at limit + 1). Used to reject donor statements whose
  * subtrees are too large to clone cheaply — without this, a single
@@ -454,6 +504,12 @@ function collectDonorStatements(code: string): any[] {
       // and `let x;` are valid standalone, so only `const` needs the check.)
       if (node.type === 'VariableDeclaration' && node.kind === 'const' &&
           node.declarations.some((d: any) => d.init == null)) {
+        return;
+      }
+      // Reject statements carrying constructs that are only valid inside a
+      // specific enclosing context (super/await/yield/new.target). Relocated
+      // into another file's plain function they become a hard SyntaxError.
+      if (hasContextBoundConstruct(node)) {
         return;
       }
       // Reject-but-recurse: countNodesBounded is O(MAX_DONOR_NODES)
