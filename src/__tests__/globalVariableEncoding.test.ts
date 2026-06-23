@@ -63,10 +63,25 @@ describe('applyGlobalVariableEncoding', () => {
 
   it('does not encode function parameters named after globals', () => {
     const out = transform('function f(Array) { return Array; }');
-    // The parameter should not be encoded, but the body reference
-    // is ambiguous — we encode identifier references
-    // Actually the parameter itself shouldn't be encoded
+    // Neither the parameter nor its in-body reference may be encoded: `Array`
+    // here is the local parameter, not the global. Encoding `return Array` to a
+    // real-global read would ignore the argument entirely.
     expect(out).toContain('function f(Array)');
+    expect(out).not.toContain('eval(');
+  });
+
+  it('does not encode references to a locally-declared global name', () => {
+    // Regression: lodash probes the environment with
+    //   var Buffer = moduleExports ? context.Buffer : undefined;
+    //   ... Buffer ? Buffer.isBuffer : undefined
+    // Encoding those `Buffer`s to `eval("Buffer")` (the real global) made
+    // `_.isBuffer` ignore a missing Buffer. A name declared as a local binding
+    // anywhere in the program must not be encoded.
+    const out = transform(
+      'var Buffer = cond ? ctx.Buffer : undefined; var n = Buffer ? Buffer.isBuffer : undefined;',
+    );
+    expect(out).not.toContain('eval(');
+    expect(out).toContain('Buffer ? Buffer.isBuffer');
   });
 
   it('does not encode object literal keys', () => {

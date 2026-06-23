@@ -122,9 +122,31 @@ const PRIME_INTERVALS = [
 function buildSetIntervalDebugger(ast: any): any {
   const interval = PRIME_INTERVALS[randInt(0, PRIME_INTERVALS.length - 1)];
 
+  // `setInterval` is a host global, not an ECMAScript built-in: it's absent in
+  // `vm` contexts, some workers, and sandboxed evaluators. Calling it bare
+  // throws `ReferenceError: setInterval is not defined` and takes the whole
+  // module down (lodash's "root of this" test runs the bundle inside `vm`).
+  // Guard it: `(typeof setInterval !== 'undefined' ? setInterval : function(){})`.
+  const guardedSetInterval = {
+    type: 'ConditionalExpression',
+    test: {
+      type: 'BinaryExpression',
+      operator: '!==',
+      left: { type: 'UnaryExpression', operator: 'typeof', prefix: true, argument: id('setInterval') },
+      right: str('undefined'),
+    },
+    consequent: id('setInterval'),
+    alternate: {
+      type: 'FunctionExpression',
+      id: null,
+      params: [],
+      body: { type: 'BlockStatement', body: [] },
+    },
+  };
+
   const setIntervalCall = {
     type: 'CallExpression',
-    callee: id('setInterval'),
+    callee: guardedSetInterval,
     arguments: [
       {
         type: 'FunctionExpression',

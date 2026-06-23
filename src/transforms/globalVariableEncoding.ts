@@ -221,7 +221,86 @@ function isGlobalReference(node: any, parent: any): boolean {
  * placed in the rotated array, and jsfuck-encoded — making the global
  * name completely invisible in the final output.
  */
+/**
+ * Collect every name introduced as a local binding anywhere in the program:
+ * variable/function/class declarations, function & catch parameters (including
+ * destructuring patterns), and import bindings. Used to keep
+ * globalVariableEncoding from rewriting a reference that may resolve to one of
+ * these locals instead of the same-named global.
+ */
+function collectDeclaredNames(program: any): Set<string> {
+  const names = new Set<string>();
+
+  const addPattern = (pat: any): void => {
+    if (!pat || typeof pat !== 'object') return;
+    switch (pat.type) {
+      case 'Identifier':
+        names.add(pat.name);
+        break;
+      case 'AssignmentPattern':
+        addPattern(pat.left);
+        break;
+      case 'RestElement':
+        addPattern(pat.argument);
+        break;
+      case 'ArrayPattern':
+        for (const el of pat.elements || []) addPattern(el);
+        break;
+      case 'ObjectPattern':
+        for (const p of pat.properties || []) {
+          if (p.type === 'RestElement') addPattern(p.argument);
+          else addPattern(p.value);
+        }
+        break;
+    }
+  };
+
+  estraverse.traverse(program, {
+    keys: VISITOR_KEYS,
+    enter(node: any) {
+      switch (node.type) {
+        case 'VariableDeclarator':
+          addPattern(node.id);
+          break;
+        case 'FunctionDeclaration':
+        case 'FunctionExpression':
+        case 'ArrowFunctionExpression':
+          if (node.id) names.add(node.id.name);
+          for (const p of node.params || []) addPattern(p);
+          break;
+        case 'ClassDeclaration':
+        case 'ClassExpression':
+          if (node.id) names.add(node.id.name);
+          break;
+        case 'CatchClause':
+          addPattern(node.param);
+          break;
+        case 'ImportDefaultSpecifier':
+        case 'ImportNamespaceSpecifier':
+        case 'ImportSpecifier':
+          if (node.local) names.add(node.local.name);
+          break;
+      }
+    },
+    fallback: 'iteration',
+  } as any);
+
+  return names;
+}
+
 export function applyGlobalVariableEncoding(ast: any): void {
+  // Names that are declared as local bindings somewhere in the program. A
+  // reference to such a name may resolve to the local, not the global, so
+  // encoding it as `eval("Name")` (an unconditional real-global read) is
+  // unsafe. This matters for code that re-declares a global name to probe the
+  // environment: lodash does `var Buffer = moduleExports ? context.Buffer :
+  // undefined` and later `Buffer ? Buffer.isBuffer : undefined` — encoding
+  // those `Buffer`s to the real global makes `_.isBuffer` ignore a missing
+  // Buffer (breaking feature detection). Renamed locals already fall out (their
+  // name is no longer a known global), but a binding the renamer left alone —
+  // e.g. one scope analysis treated as free — would otherwise be miscompiled.
+  const locallyDeclared = collectDeclaredNames(ast.program);
+
   // Collect replacements first, then apply (avoid modifying during traversal)
   const replacements: { node: any; replacement: any }[] = [];
 
@@ -235,6 +314,7 @@ export function applyGlobalVariableEncoding(ast: any): void {
       // assigned. See capturedGlobals.ts.
       if ((node as any).__capturedGlobalInit) return;
       if (!getEncodableGlobals().has(node.name)) return;
+      if (locallyDeclared.has(node.name)) return;
       if (!isGlobalReference(node, parent)) return;
 
       replacements.push({

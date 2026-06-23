@@ -1,5 +1,7 @@
 # egodeath
 
+**This project does not achieve indistinguishability obfuscation. You should not be using this to product to protect secrets.  It exists to deter reverse engineering, not prevent it**
+
 ![Tests](https://github.com/nstarke/egodeath/actions/workflows/ci.yml/badge.svg)
 
 ![images/screenshot.png](images/screenshot.png)

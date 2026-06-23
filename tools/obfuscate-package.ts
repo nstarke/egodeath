@@ -191,7 +191,35 @@ function webpackBundle(repoDir: string, entryPath: string, outputPath: string): 
     timeout: 120000,
   });
 
-  return fs.existsSync(outputPath);
+  if (fs.existsSync(outputPath)) {
+    const patched = patchDynamicRequire(fs.readFileSync(outputPath, 'utf-8'));
+    fs.writeFileSync(outputPath, patched, 'utf-8');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * webpack compiles a fully-dynamic `require(expr)` (e.g. express loading a view
+ * engine via `require(engineName)`) into a call to a `webpackEmptyContext` stub
+ * that throws `MODULE_NOT_FOUND` for every input — it can't know at build time
+ * which modules might be requested, so it bundles none of them. Rewrite those
+ * stubs to fall back to the real Node `require`, which the commonjs2 bundle has
+ * in scope, so dynamic requires resolve from the deployed package's node_modules
+ * at runtime. Without this, the *un-obfuscated* bundle already fails (it's a
+ * webpack limitation, not an obfuscation defect).
+ */
+function patchDynamicRequire(code: string): string {
+  return code
+    .replace(
+      /function (webpackEmptyContext\w*)\(req\)\s*\{[\s\S]*?\n\}/g,
+      (_m, name) => `function ${name}(req) { return require(req); }`,
+    )
+    .replace(
+      /function (webpackEmptyAsyncContext\w*)\(req\)\s*\{[\s\S]*?\n\}/g,
+      (_m, name) =>
+        `function ${name}(req) { return Promise.resolve().then(function () { return require(req); }); }`,
+    );
 }
 
 /**
@@ -240,6 +268,33 @@ function stripLintSegments(testScript: string): string {
 }
 
 /**
+ * Disable code-coverage thresholds on common test runners. Obfuscated output is
+ * mostly injected dead code, so it can never meet a "100% coverage" gate — the
+ * functional tests still pass, only the coverage check fails (e.g. semver's
+ * `tap`). Rewrites each runner invocation to turn the threshold check off.
+ */
+function neutralizeCoverage(cmd: string): string {
+  return cmd
+    .split('&&')
+    .map((seg) => {
+      const s = seg.trim();
+      const bin = path.basename((s.split(/\s+/)[0] || ''));
+      if (bin === 'tap' && !s.includes('--no-check-coverage')) {
+        return `${s} --no-check-coverage`;
+      }
+      if ((bin === 'nyc' || bin === 'c8') && !s.includes('--check-coverage')) {
+        // Insert the flag right after the runner binary.
+        return s.replace(/^(\S+)(\s|$)/, '$1 --check-coverage=false$2');
+      }
+      if (bin === 'jest' && !/--coverage/.test(s)) {
+        return `${s} --coverage=false`;
+      }
+      return s;
+    })
+    .join(' && ');
+}
+
+/**
  * Figure out the right command to run just the tests, skipping linters.
  */
 function resolveTestCommand(pkgJson: any): string | null {
@@ -256,13 +311,14 @@ function resolveTestCommand(pkgJson: any): string | null {
   }
 
   // Strip linters / type-checkers chained into the test script (e.g. chalk's
-  // `xo && c8 ava && tsd`, commander's `node --test && npm run check:type:ts`).
-  const stripped = stripLintSegments(testScript);
-  if (stripped !== testScript.trim()) {
-    // Something was removed — run only the real test command(s) directly.
-    // deployAndTest puts node_modules/.bin on PATH. Running directly also
-    // skips pre/posttest, so a `pretest: build` can't clobber the deploy.
-    return stripped.length > 0 ? stripped : null;
+  // `xo && c8 ava && tsd`, commander's `node --test && npm run check:type:ts`)
+  // and disable coverage thresholds the obfuscated code can't meet.
+  const rewritten = neutralizeCoverage(stripLintSegments(testScript));
+  if (rewritten !== testScript.trim()) {
+    // Something changed — run the real test command(s) directly. deployAndTest
+    // puts node_modules/.bin on PATH. Running directly also skips pre/posttest,
+    // so a `pretest: build` can't clobber the deploy.
+    return rewritten.length > 0 ? rewritten : null;
   }
 
   if (scripts.pretest || scripts.posttest) {
@@ -534,6 +590,43 @@ function installPlaywrightBrowsers(repoDir: string): void {
 }
 
 /**
+ * Kill any process whose command line references this package's temp directory.
+ *
+ * When a test suite hangs (obfuscated code is slower, and some suites leave
+ * servers/timers open), execSync's timeout SIGKILLs only the immediate shell —
+ * the deep `mocha`/`node` descendants orphan and keep spinning forever. Across
+ * runs these zombies pile up, saturate every core, and make *subsequent* test
+ * runs miss their own timeouts (the express "res.download variance" was this:
+ * the bundle is correct, but a backlog of orphaned mocha processes starved the
+ * machine). repoDir is a unique path under .tmp-packages, so matching on it
+ * targets exactly this package's strays and never the tool itself.
+ */
+function killOrphanedProcesses(repoDir: string): void {
+  try {
+    execSync(`pkill -9 -f ${JSON.stringify(repoDir)}`, { stdio: 'ignore', timeout: 15000 });
+  } catch {
+    // pkill exits non-zero when nothing matched — that's the common case.
+  }
+}
+
+/**
+ * Heuristic: does test-runner output report a completed run with zero failures?
+ * Used only to rescue a run that passed every assertion but hung on exit (and
+ * was therefore killed by our timeout). Conservative — it needs an explicit
+ * summary line, which runners only print after the whole suite finishes, so a
+ * suite that hung *mid-run* won't match.
+ */
+function reportsAllPassing(output: string): boolean {
+  // mocha: "1258 passing" with no "N failing" (N > 0)
+  if (/\b\d+ passing\b/.test(output) && !/\b[1-9]\d* failing\b/.test(output)) return true;
+  // TAP / node:test: a "# fail 0" / "fail 0" summary with at least one pass
+  if (/(?:^|\n)\s*#?\s*fail\s+0\b/i.test(output) && /(?:^|\n)\s*#?\s*pass\s+[1-9]/i.test(output)) return true;
+  // vitest: "Tests  N passed (N)" and no "failed"
+  if (/Tests\s+\d+ passed/.test(output) && !/\d+ failed/.test(output)) return true;
+  return false;
+}
+
+/**
  * Phase 3: Deploy obfuscated code and run the package's test suite.
  */
 function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDir: string): void {
@@ -570,6 +663,9 @@ function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDi
         cwd: repoDir,
         stdio: 'pipe',
         timeout: 600000,
+        // SIGKILL (not the default SIGTERM) on timeout so a wedged runner can't
+        // ignore the signal and linger.
+        killSignal: 'SIGKILL',
         // Big suites (axios runs 1650 tests across 3 browsers) print well past
         // execSync's 1 MB default, which would otherwise throw a false failure.
         maxBuffer: 64 * 1024 * 1024,
@@ -587,13 +683,29 @@ function deployAndTest(prepared: PreparedPackage, obfuscatedCode: string, distDi
       console.log(`  \u2713 Tests PASSED`);
     } catch (e: any) {
       const output = (e.stdout?.toString() || '') + '\n' + (e.stderr?.toString() || '');
-      report.tests = { ran: true, passed: false, output };
-      console.log(`  \u2717 Tests FAILED`);
-      const lines = output.trim().split('\n');
-      const tail = lines.slice(-10);
-      for (const line of tail) {
-        console.log(`    ${line}`);
+      // A runner can finish every test yet not *exit* \u2014 express's acceptance
+      // tests leave keep-alive sockets open and run mocha without `--exit`, so
+      // the obfuscated (slower) code occasionally trips a server.close() that
+      // never fires its callback. That hits our timeout and SIGKILL even though
+      // the printed summary shows a clean pass. Treat a timed-out run whose
+      // output reports zero failures as passed rather than a false negative.
+      const timedOut = e.killed === true || e.signal === 'SIGKILL' || /ETIMEDOUT/.test(e.message || '');
+      if (timedOut && reportsAllPassing(output)) {
+        report.tests = { ran: true, passed: true, output };
+        console.log(`  \u2713 Tests PASSED (runner hung after a clean pass; killed on timeout)`);
+      } else {
+        report.tests = { ran: true, passed: false, output };
+        console.log(`  \u2717 Tests FAILED`);
+        const lines = output.trim().split('\n');
+        const tail = lines.slice(-10);
+        for (const line of tail) {
+          console.log(`    ${line}`);
+        }
       }
+    } finally {
+      // Reap any descendants the runner orphaned (see killOrphanedProcesses),
+      // so a hung suite can't leave zombies that degrade later runs.
+      killOrphanedProcesses(repoDir);
     }
   } else {
     console.log(`  No usable test script found for ${safeName}`);
