@@ -440,6 +440,34 @@ describe('regression: dummy param injection preserves Function.length', () => {
   });
 });
 
+describe('regression: noise injection never corrupts string concatenation', () => {
+  // noiseInjection wraps `x = <expr>` assignments in arithmetic identities
+  // that only hold for int32 (`(expr | 0) ^ n ... ^ n`). It used to treat any
+  // `+` BinaryExpression as eligible, but `+` is string concatenation when an
+  // operand is a string — so `s = "a" + s` became `s = (("a" + s) | 0) ^ n`,
+  // coercing the string to 0. This silently corrupted any string-builder, e.g.
+  // lodash's `_.template` (which assembles a function body in a `source`
+  // string), making it return a number. (transforms/noiseInjection.ts)
+  it('a string built by repeated concatenation stays a string', () => {
+    const code = `
+      function build(parts) {
+        var source = "header:";
+        for (var i = 0; i < parts.length; i++) {
+          source = source + "[" + parts[i] + "]";
+        }
+        source = "(" + source + ")";
+        return source;
+      }
+      module.exports = { out: build(["a", "b", "c"]) };
+    `;
+    // Run several times — noise injection is randomized.
+    for (let i = 0; i < 8; i++) {
+      const mod = runAsCommonJS(code, { targetTokens: 2000 });
+      expect(mod.out).toBe('(header:[a][b][c])');
+    }
+  });
+});
+
 describe('regression: opaquePredicates Math.random probe survives local Math shadowing', () => {
   // lodash's runInContext does `var Math = context.Math` which hoists
   // Math into the function scope. A probe calling `Math.random()` at

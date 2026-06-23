@@ -362,10 +362,23 @@ function injectNoise(block: any): void {
   block.body = newBody;
 }
 
+// The noise patterns round-trip a value through arithmetic identities that
+// only hold for 32-bit integers (several wrap the value in `(expr | 0)` or XOR
+// it, which coerce to int32). Only the bitwise operators are guaranteed to
+// produce an int32 result, so those are the only safe expressions to wrap.
+//
+// Crucially this excludes `+`: it is string concatenation when either operand
+// is a string, so wrapping `s = "a" + s` as `(("a" + s) | 0) ^ n` coerces the
+// string to 0 and silently corrupts the value (this broke lodash's template
+// engine, where `source` is built by string concatenation). `- * / %` are
+// excluded too — they coerce to Number but can yield non-integers that the
+// `| 0`/XOR patterns would truncate.
+const SAFE_NOISE_OPS = ['|', '&', '^', '<<', '>>', '>>>'];
+
 /**
  * Check if a statement is an eligible var declaration for noise injection.
  * Must be: VariableDeclaration with a single declarator where id is
- * an Identifier and init is an arithmetic BinaryExpression.
+ * an Identifier and init is a bitwise (int32-producing) BinaryExpression.
  */
 function isEligibleVarDecl(stmt: any): boolean {
   if (stmt.type !== 'VariableDeclaration') return false;
@@ -373,14 +386,13 @@ function isEligibleVarDecl(stmt: any): boolean {
   const decl = stmt.declarations[0];
   if (decl.id.type !== 'Identifier') return false;
   if (!decl.init || decl.init.type !== 'BinaryExpression') return false;
-  const arithOps = ['+', '-', '*', '/', '%', '|', '&', '^', '<<', '>>', '>>>'];
-  return arithOps.includes(decl.init.operator);
+  return SAFE_NOISE_OPS.includes(decl.init.operator);
 }
 
 /**
  * Check if a statement is an eligible assignment for noise injection.
- * Must be: ExpressionStatement with AssignmentExpression where
- * left is an Identifier and right contains arithmetic.
+ * Must be: ExpressionStatement with AssignmentExpression where left is an
+ * Identifier and right is a bitwise (int32-producing) BinaryExpression.
  */
 function isEligibleAssignment(stmt: any): boolean {
   if (stmt.type !== 'ExpressionStatement') return false;
@@ -389,11 +401,9 @@ function isEligibleAssignment(stmt: any): boolean {
   if (expr.operator !== '=') return false;
   if (expr.left.type !== 'Identifier') return false;
 
-  // Only inject into arithmetic expressions to avoid type coercion issues
   const right = expr.right;
   if (right.type === 'BinaryExpression') {
-    const arithOps = ['+', '-', '*', '/', '%', '|', '&', '^', '<<', '>>', '>>>'];
-    return arithOps.includes(right.operator);
+    return SAFE_NOISE_OPS.includes(right.operator);
   }
 
   return false;

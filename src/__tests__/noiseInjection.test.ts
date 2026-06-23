@@ -16,12 +16,12 @@ function transform(code: string): string {
 describe('applyNoiseInjection', () => {
   it('injects noise into arithmetic var declarations', () => {
     const code = `function f(x) {
-      var a = x + 10;
-      var b = a * 3;
-      var c = b - 5;
-      var d = c + a;
-      var e = d * 2;
-      var g = e - b;
+      var a = x | 10;
+      var b = a & 7;
+      var c = b ^ 5;
+      var d = c << 1;
+      var e = d | a;
+      var g = e & b;
       return g;
     }`;
     let injected = false;
@@ -39,10 +39,10 @@ describe('applyNoiseInjection', () => {
   it('injects noise into expression assignments', () => {
     const code = `function f(x) {
       var a;
-      a = x + 10;
-      a = a * 3;
-      a = a - 5;
-      a = a + 1;
+      a = x | 10;
+      a = a & 7;
+      a = a ^ 5;
+      a = a << 1;
       return a;
     }`;
     let injected = false;
@@ -79,12 +79,12 @@ describe('applyNoiseInjection', () => {
 
   it('uses different noise patterns across injections', () => {
     const code = `function f(x) {
-      var a = x + 10;
-      var b = a * 3;
-      var c = b - 5;
-      var d = c + a;
-      var e = d * 2;
-      var g = e - b;
+      var a = x | 10;
+      var b = a & 7;
+      var c = b ^ 5;
+      var d = c << 1;
+      var e = d | a;
+      var g = e & b;
       return g;
     }`;
     const patterns = new Set<string>();
@@ -198,12 +198,12 @@ describe('noise injection correctness', () => {
 describe('noise injection diversity', () => {
   it('generates unique noise values per injection', () => {
     const code = `function f(x) {
-      var a = x + 10;
-      var b = a * 3;
-      var c = b - 5;
-      var d = c + a;
-      var e = d * 2;
-      var g = e - b;
+      var a = x | 10;
+      var b = a & 7;
+      var c = b ^ 5;
+      var d = c << 1;
+      var e = d | a;
+      var g = e & b;
       return g;
     }`;
     const noiseVals = new Set<string>();
@@ -219,12 +219,12 @@ describe('noise injection diversity', () => {
 
   it('noise variables have unique generated names', () => {
     const code = `function f(x) {
-      var a = x + 10;
-      var b = a * 3;
-      var c = b - 5;
-      var d = c + a;
-      var e = d * 2;
-      var g = e - b;
+      var a = x | 10;
+      var b = a & 7;
+      var c = b ^ 5;
+      var d = c << 1;
+      var e = d | a;
+      var g = e & b;
       return g;
     }`;
     const names = new Set<string>();
