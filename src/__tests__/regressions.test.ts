@@ -364,6 +364,82 @@ describe('regression: ThrowStatement argument is substituted', () => {
   });
 });
 
+describe('regression: named function expression self-reference is substituted', () => {
+  // `var f = function NAME(...) { ... NAME ... }` — NAME binds only inside the
+  // body. scope analysis renames the self-references, but the secondPass
+  // FunctionExpression handler used to substitute only params, leaving the
+  // `id` (the declaration) at its original name → the renamed self-references
+  // resolved to nothing (ReferenceError). This hit lodash's
+  // `var runInContext = function runInContext(context) { ... lodash.runInContext = runInContext; ... }`.
+  // (passes/secondPass.ts)
+  it('a named function expression can reference itself', () => {
+    const code = `
+      var api = {};
+      var make = function build(context) {
+        api.self = build;
+        api.factorial = function fac(n) { return n <= 1 ? 1 : n * fac(n - 1); };
+        return api;
+      };
+      module.exports = make();
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(typeof mod.self).toBe('function');
+    expect(mod.factorial(5)).toBe(120);
+  });
+
+  it('an anonymous function expression (null id) still works', () => {
+    const code = `
+      var double = function (n) { return n * 2; };
+      module.exports = { value: double(21) };
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(mod.value).toBe(42);
+  });
+});
+
+describe('regression: dummy param injection preserves Function.length', () => {
+  // thirdPass appends decoy params to functions. Emitting them as plain
+  // identifiers inflates `Function.length`, which silently breaks any code
+  // that reads arity — notably lodash's `baseRest`, where `func.length`
+  // decides where rest args start, so `_.assign`/`_.merge` collected an empty
+  // source list and copied nothing. Dummies must be default-valued params
+  // (which don't count toward `.length`). (passes/thirdPass.ts)
+  it('a baseRest-style arity-dependent wrapper still works', () => {
+    const code = `
+      function baseRest(func) {
+        var start = func.length - 1;
+        return function () {
+          var pre = [], rest = [];
+          for (var i = 0; i < start; i++) pre.push(arguments[i]);
+          for (var j = start; j < arguments.length; j++) rest.push(arguments[j]);
+          return func.apply(this, pre.concat([rest]));
+        };
+      }
+      var assign = baseRest(function (object, sources) {
+        for (var i = 0; i < sources.length; i++) {
+          var s = sources[i];
+          for (var k in s) object[k] = s[k];
+        }
+        return object;
+      });
+      module.exports = { result: assign({}, { a: 1, b: 2 }, { c: 3 }) };
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(mod.result).toEqual({ a: 1, b: 2, c: 3 });
+  });
+
+  it('reported arity matches the original parameter count', () => {
+    const code = `
+      function two(a, b) { return a + b; }
+      function none() { return 1; }
+      module.exports = { two: two.length, none: none.length };
+    `;
+    const mod = runAsCommonJS(code, { targetTokens: 2000 });
+    expect(mod.two).toBe(2);
+    expect(mod.none).toBe(0);
+  });
+});
+
 describe('regression: opaquePredicates Math.random probe survives local Math shadowing', () => {
   // lodash's runInContext does `var Math = context.Math` which hoists
   // Math into the function scope. A probe calling `Math.random()` at

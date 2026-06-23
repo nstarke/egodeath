@@ -164,6 +164,14 @@ export const secondPassHandlers: PassHandlerMap = {
   },
 
   FunctionExpression(node) {
+    // A named function expression's name (`var f = function NAME() {...}`) is a
+    // binding visible only inside the body. Self-references to NAME there get
+    // renamed via scope analysis, so the `id` must be renamed to match —
+    // otherwise the declaration keeps the original name and the renamed
+    // self-references resolve to nothing (ReferenceError). `substitute` is a
+    // no-op for the `null` id of an anonymous function expression. This hit
+    // lodash's `var runInContext = function runInContext(...) { ... }`.
+    substitute(node.id);
     node.params.forEach((param: ASTNode) => substitute(param));
     return node;
   },

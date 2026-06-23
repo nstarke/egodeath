@@ -70,6 +70,55 @@ function liveNamesFor(node: any): Set<string> | undefined {
 }
 
 /**
+ * True if a function body opens with a `"use strict"` directive. Such a
+ * function may not have a "non-simple" parameter list (defaults, rest,
+ * destructuring) — `SyntaxError: Illegal 'use strict' directive in function
+ * with non-simple parameter list` — so we can't give it default-valued dummy
+ * params and skip injection entirely.
+ */
+function hasUseStrictDirective(node: any): boolean {
+  const body = node.body;
+  if (!body || body.type !== 'BlockStatement') return false;
+  // Babel keeps directives in a dedicated array.
+  if (Array.isArray(body.directives)) {
+    for (const d of body.directives) {
+      if (d && d.value && d.value.value === 'use strict') return true;
+    }
+  }
+  // ESTree shape: a leading string-literal ExpressionStatement.
+  const first = body.body && body.body[0];
+  if (first && first.type === 'ExpressionStatement') {
+    const e = first.expression;
+    if (e && (e.value === 'use strict' ||
+      (e.type === 'StringLiteral' && e.value === 'use strict'))) return true;
+  }
+  return false;
+}
+
+/**
+ * Append dummy parameters to a function, preserving its `Function.length`.
+ *
+ * The dummies are emitted as default-valued params (`name = <n>`), which do
+ * NOT count toward `.length` (only leading simple params do). Plain dummy
+ * params would inflate `.length`, which breaks any runtime that reads arity —
+ * notably lodash's `baseRest`, where `func.length` decides where rest
+ * arguments start, so an inflated arity makes `_.assign`/`_.merge` collect an
+ * empty source list and silently copy nothing.
+ */
+function injectDummyParams(node: any): void {
+  if (hasRestParam(node)) return;
+  // A "use strict" body can't carry a non-simple parameter list, so leave its
+  // arity alone rather than emit invalid syntax.
+  if (hasUseStrictDirective(node)) return;
+  const dummies = addIdentifiers(liveNamesFor(node)).map((id) => ({
+    type: 'AssignmentPattern',
+    left: id,
+    right: { type: 'NumericLiteral', value: crypto.randomBytes(1)[0] },
+  }));
+  node.params = node.params.concat(dummies);
+}
+
+/**
  * Third pass: inject dummy parameters into functions and strip comments.
  */
 export const thirdPassHandlers: PassHandlerMap = {
@@ -88,7 +137,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   FunctionExpression(node: any) {
     // Accessor flag is set by MethodDefinition handler (ESTree shape).
     if (node.__egodeath_accessor) return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
+    injectDummyParams(node);
     return node;
   },
 
@@ -100,7 +149,7 @@ export const thirdPassHandlers: PassHandlerMap = {
   AssignmentExpression(node) { return node; },
 
   FunctionDeclaration(node) {
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
+    injectDummyParams(node);
     return node;
   },
 
@@ -116,7 +165,7 @@ export const thirdPassHandlers: PassHandlerMap = {
 
   // Modern ES6+ node types
   ArrowFunctionExpression(node) {
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
+    injectDummyParams(node);
     return node;
   },
 
@@ -167,7 +216,7 @@ export const thirdPassHandlers: PassHandlerMap = {
 
   ObjectMethod(node) {
     if (isAccessor(node)) return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
+    injectDummyParams(node);
     return node;
   },
 
@@ -180,7 +229,7 @@ export const thirdPassHandlers: PassHandlerMap = {
     // on `Foo.length` reflecting the expected constructor arity. Skip to
     // be safe.
     if (node.kind === 'constructor') return node;
-    if (!hasRestParam(node)) node.params = node.params.concat(addIdentifiers(liveNamesFor(node)));
+    injectDummyParams(node);
     return node;
   },
 
