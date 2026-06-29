@@ -1,5 +1,10 @@
 import * as recast from 'recast';
-import { analyzeScopes, setScopeAnalysis, resetScopeAnalysis } from '../scopeAnalysis';
+import {
+  analyzeScopes,
+  setScopeAnalysis,
+  resetScopeAnalysis,
+  copyScopeClassification,
+} from '../scopeAnalysis';
 import { resetIssuedNames } from '../random';
 import { obfuscate } from '../obfuscator';
 
@@ -135,6 +140,89 @@ describe('analyzeScopes', () => {
     expect(ls.every((n) => a.skipNodes.has(n))).toBe(true);
   });
 
+  it('binds an object-pattern rest element', () => {
+    const ast = parse('const {alpha, ...others} = src; others; alpha;');
+    const a = analyzeScopes(ast.program);
+    const rest = identsByName(ast, 'others');
+    expect(rest.length).toBe(2);
+    const render = a.resolvedNames.get(rest[0]);
+    expect(render).toBeDefined();
+    expect(rest.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+  });
+
+  it('binds import default and named (aliased) specifiers', () => {
+    const ast = parse(`import def, { orig as aliased } from 'mod'; def; aliased;`);
+    const a = analyzeScopes(ast.program);
+
+    for (const local of ['def', 'aliased']) {
+      const nodes = identsByName(ast, local);
+      // declaration specifier + use reference
+      expect(nodes.length).toBeGreaterThanOrEqual(2);
+      const render = a.resolvedNames.get(nodes[0]);
+      expect(render).toBeDefined();
+      expect(nodes.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+    }
+
+    // `orig` is the foreign module's exported name (a property key) — skipped.
+    const origNodes = identsByName(ast, 'orig');
+    expect(origNodes.length).toBe(1);
+    expect(a.skipNodes.has(origNodes[0])).toBe(true);
+  });
+
+  it('binds a namespace import specifier', () => {
+    const ast = parse(`import * as ns from 'mod'; ns.thing;`);
+    const a = analyzeScopes(ast.program);
+    const nsNodes = identsByName(ast, 'ns');
+    expect(nsNodes.length).toBe(2);
+    const render = a.resolvedNames.get(nsNodes[0]);
+    expect(render).toBeDefined();
+    expect(nsNodes.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+  });
+
+  it('skips the exported name of an export specifier', () => {
+    const ast = parse(`const local = 1; export { local as pub };`);
+    const a = analyzeScopes(ast.program);
+    // `pub` is the public alias — not a local binding.
+    const pubNodes = identsByName(ast, 'pub');
+    expect(pubNodes.length).toBe(1);
+    expect(a.skipNodes.has(pubNodes[0])).toBe(true);
+    // `local` references resolve to the const binding.
+    const localNodes = identsByName(ast, 'local');
+    const render = a.resolvedNames.get(localNodes[0]);
+    expect(render).toBeDefined();
+    expect(localNodes.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+  });
+
+  it('skips both names of a re-export (export ... from)', () => {
+    const ast = parse(`export { thing as renamed } from 'other';`);
+    const a = analyzeScopes(ast.program);
+    // In a re-export, `thing` is a property of the foreign module and
+    // `renamed` is the public alias — neither is a local binding.
+    expect(a.skipNodes.has(identsByName(ast, 'thing')[0])).toBe(true);
+    expect(a.skipNodes.has(identsByName(ast, 'renamed')[0])).toBe(true);
+  });
+
+  it('binds a named class expression for in-body self-reference', () => {
+    const ast = parse('const C = class Inner { make() { return new Inner(); } };');
+    const a = analyzeScopes(ast.program);
+    const inner = identsByName(ast, 'Inner');
+    // class id declaration + the `new Inner()` reference inside a method.
+    expect(inner.length).toBe(2);
+    const render = a.resolvedNames.get(inner[0]);
+    expect(render).toBeDefined();
+    expect(inner.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+  });
+
+  it('merges a static block body with its class scope', () => {
+    const ast = parse('class A { static { let z = 1; z + 1; } }');
+    const a = analyzeScopes(ast.program);
+    const zs = identsByName(ast, 'z');
+    expect(zs.length).toBe(2);
+    const render = a.resolvedNames.get(zs[0]);
+    expect(render).toBeDefined();
+    expect(zs.every((n) => a.resolvedNames.get(n) === render)).toBe(true);
+  });
+
   it('exposes live-names sets per function scope', () => {
     const ast = parse('function outer() { let x = 1; function inner() { let y = 2; return x + y; } }');
     const a = analyzeScopes(ast.program);
@@ -146,6 +234,59 @@ describe('analyzeScopes', () => {
     expect(innerLive).toBeDefined();
     // inner's live set is a superset of outer's (includes ancestors).
     for (const v of outerLive!) expect(innerLive!.has(v)).toBe(true);
+  });
+});
+
+describe('copyScopeClassification', () => {
+  it('does nothing when no analysis is installed', () => {
+    resetScopeAnalysis();
+    const from = { type: 'Identifier', name: 'x' } as any;
+    const to = { type: 'Identifier', name: 'x' } as any;
+    expect(() => copyScopeClassification(from, to)).not.toThrow();
+  });
+
+  it('copies a resolved name onto the clone', () => {
+    const ast = parse('var x = 1; x;');
+    const a = analyzeScopes(ast.program);
+    setScopeAnalysis(a);
+    const from = identsByName(ast, 'x')[0];
+    const to = { type: 'Identifier', name: 'x' } as any;
+    copyScopeClassification(from, to);
+    expect(a.resolvedNames.get(to)).toBe(a.resolvedNames.get(from));
+  });
+
+  it('copies free-reference status onto the clone', () => {
+    const ast = parse('missingGlobal;');
+    const a = analyzeScopes(ast.program);
+    setScopeAnalysis(a);
+    const from = identsByName(ast, 'missingGlobal')[0];
+    expect(a.freeReferences.has(from)).toBe(true);
+    const to = { type: 'Identifier', name: 'missingGlobal' } as any;
+    copyScopeClassification(from, to);
+    expect(a.freeReferences.has(to)).toBe(true);
+  });
+
+  it('copies skip status onto the clone', () => {
+    const ast = parse('var o = 1; o.prop;');
+    const a = analyzeScopes(ast.program);
+    setScopeAnalysis(a);
+    const from = identsByName(ast, 'prop')[0];
+    expect(a.skipNodes.has(from)).toBe(true);
+    const to = { type: 'Identifier', name: 'prop' } as any;
+    copyScopeClassification(from, to);
+    expect(a.skipNodes.has(to)).toBe(true);
+  });
+
+  it('does nothing for a source with no classification', () => {
+    const ast = parse('var x = 1;');
+    const a = analyzeScopes(ast.program);
+    setScopeAnalysis(a);
+    const from = { type: 'Identifier', name: 'unseen' } as any;
+    const to = { type: 'Identifier', name: 'unseen' } as any;
+    copyScopeClassification(from, to);
+    expect(a.resolvedNames.has(to)).toBe(false);
+    expect(a.freeReferences.has(to)).toBe(false);
+    expect(a.skipNodes.has(to)).toBe(false);
   });
 });
 

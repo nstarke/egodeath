@@ -89,6 +89,63 @@ describe('applyGlobalVariableEncoding', () => {
     expect(out).not.toContain('eval(');
   });
 
+  it('does not encode a global name used as an assignment target', () => {
+    // `eval(...)` is not an lvalue — encoding the LHS would produce
+    // "Invalid left-hand side in assignment".
+    const out = transform('Math = 1;');
+    expect(out).not.toContain('eval(');
+    expect(out).toContain('Math = 1');
+  });
+
+  it('does not encode a global name in an update expression', () => {
+    const out = transform('Math++;');
+    expect(out).not.toContain('eval(');
+    expect(out).toContain('Math++');
+  });
+
+  it('does not encode a for-in binding target without a declaration kind', () => {
+    const out = transform('for (Math in obj) {}');
+    expect(out).not.toContain('eval(');
+    expect(out).toContain('for (Math in obj)');
+  });
+
+  it('does not encode array-destructuring binding targets', () => {
+    const out = transform('[Math] = arr;');
+    expect(out).not.toContain('eval(');
+  });
+
+  it('does not encode a rest-element destructuring target', () => {
+    const out = transform('[...Math] = arr;');
+    expect(out).not.toContain('eval(');
+  });
+
+  it('does not encode an assignment-pattern (default) target', () => {
+    const out = transform('[Math = 5] = arr;');
+    expect(out).not.toContain('eval(');
+  });
+
+  it('conservatively does not encode an object-property value', () => {
+    // `{ foo: Math }` — Math is a reference, but distinguishing a literal
+    // value from a destructuring binding needs grandparent info, so the
+    // transform errs toward correctness and leaves it alone.
+    const out = transform('var x = { foo: Math };');
+    expect(out).not.toContain('eval(');
+  });
+
+  it('does not encode a global-named statement label', () => {
+    const out = transform('Math: x = 1;');
+    expect(out).not.toContain('eval(');
+    expect(out).toContain('Math:');
+  });
+
+  it('handles object-pattern rest bindings when collecting declared names', () => {
+    // Exercises the ObjectPattern rest-element path in declared-name
+    // collection; a shadowing global binding here is left untouched.
+    const out = transform('var {Math, ...rest} = obj; var y = Math.PI;');
+    // Math is declared as a local binding, so every Math reference is skipped.
+    expect(out).not.toContain('eval(');
+  });
+
   it('handles multiple different globals', () => {
     const out = transform('var a = Math.PI; var b = Array.isArray([]); var c = Object.keys({});');
     // Should have 3 eval calls
