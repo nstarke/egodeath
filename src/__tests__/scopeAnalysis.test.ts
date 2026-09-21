@@ -36,10 +36,12 @@ beforeEach(() => {
 });
 
 describe('analyzeScopes', () => {
+  // Use custom names for rename tests: jsdom exposes x/y as DOM prototype
+  // properties, and the analyzer deliberately preserves keyword-named bindings.
   it('assigns the same rename to a binding and all its references', () => {
-    const ast = parse('var x = 1; x + 2; x * 3;');
+    const ast = parse('var localValue = 1; localValue + 2; localValue * 3;');
     const a = analyzeScopes(ast.program);
-    const xs = identsByName(ast, 'x');
+    const xs = identsByName(ast, 'localValue');
     expect(xs.length).toBe(3);
     const names = new Set(xs.map((n) => a.resolvedNames.get(n)));
     expect(names.size).toBe(1);
@@ -47,46 +49,62 @@ describe('analyzeScopes', () => {
   });
 
   it('picks different renames for same-named bindings in sibling scopes', () => {
-    const ast = parse('function a(x) { return x; } function b(x) { return x; }');
+    const ast = parse('function a(localValue) { return localValue; } function b(localValue) { return localValue; }');
     const a = analyzeScopes(ast.program);
-    const xs = identsByName(ast, 'x');
+    const xs = identsByName(ast, 'localValue');
     // 4 occurrences: two params, two return references.
     expect(xs.length).toBe(4);
     const inA = xs.slice(0, 2).map((n) => a.resolvedNames.get(n));
     const inB = xs.slice(2, 4).map((n) => a.resolvedNames.get(n));
+    expect(inA[0]).toBeDefined();
+    expect(inB[0]).toBeDefined();
     expect(inA[0]).toBe(inA[1]);
     expect(inB[0]).toBe(inB[1]);
     expect(inA[0]).not.toBe(inB[0]);
   });
 
   it('marks free references', () => {
-    const ast = parse('var x = 1; console.log(y);');
+    const ast = parse('var localValue = 1; console.log(externalValue);');
     const a = analyzeScopes(ast.program);
-    const ys = identsByName(ast, 'y');
+    const ys = identsByName(ast, 'externalValue');
     expect(ys.length).toBe(1);
     expect(a.freeReferences.has(ys[0])).toBe(true);
     expect(a.resolvedNames.has(ys[0])).toBe(false);
   });
 
   it('handles var hoisting through nested blocks', () => {
-    const ast = parse('function f() { { var x = 1; } return x; }');
+    const ast = parse('function f() { { var localValue = 1; } return localValue; }');
     const a = analyzeScopes(ast.program);
-    const xs = identsByName(ast, 'x');
+    const xs = identsByName(ast, 'localValue');
     expect(xs.length).toBe(2);
+    expect(a.resolvedNames.get(xs[0])).toBeDefined();
     expect(a.resolvedNames.get(xs[0])).toBe(a.resolvedNames.get(xs[1]));
   });
 
   it('scopes let to its enclosing block', () => {
-    const ast = parse('let x = 1; { let x = 2; x; } x;');
+    const ast = parse('let localValue = 1; { let localValue = 2; localValue; } localValue;');
     const a = analyzeScopes(ast.program);
-    const xs = identsByName(ast, 'x');
+    const xs = identsByName(ast, 'localValue');
     // 4 occurrences: outer decl, inner decl, inner ref, outer ref.
     expect(xs.length).toBe(4);
     const outer = a.resolvedNames.get(xs[0]);
     const inner = a.resolvedNames.get(xs[1]);
+    expect(outer).toBeDefined();
+    expect(inner).toBeDefined();
     expect(outer).not.toBe(inner);
     expect(a.resolvedNames.get(xs[2])).toBe(inner);
     expect(a.resolvedNames.get(xs[3])).toBe(outer);
+  });
+
+  it('preserves bindings named after DOM prototype properties', () => {
+    const ast = parse('function f(x, y) { return x + y; }');
+    const a = analyzeScopes(ast.program);
+    for (const name of ['x', 'y']) {
+      const nodes = identsByName(ast, name);
+      expect(nodes).toHaveLength(2);
+      expect(nodes.every(n => a.skipNodes.has(n))).toBe(true);
+      expect(nodes.some(n => a.resolvedNames.has(n))).toBe(false);
+    }
   });
 
   it('binds catch params in the catch scope', () => {

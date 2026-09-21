@@ -10,6 +10,9 @@ module.exports = {
   testTimeout: 60000,
   // Limit workers to avoid memory pressure from heavy obfuscation tests
   maxWorkers: 2,
+  // Recycle workers between suites so generated code, timers, and compiler
+  // state cannot accumulate until Node's heap is exhausted on CI runners.
+  workerIdleMemoryLimit: '512MB',
   transform: {
     '^.+\\.ts$': ['ts-jest', {
       tsconfig: {
