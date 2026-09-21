@@ -1,48 +1,7 @@
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as recast from 'recast';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
 
 // ---- Exclusions ----
 
@@ -66,6 +25,10 @@ function shouldProxy(
   mcName: string,
 ): boolean {
   const callee = node.callee;
+
+  // Optional chains have their own short-circuiting and receiver rules.
+  if (node.optional || callee.type === 'OptionalMemberExpression' ||
+      callee.type === 'ChainExpression') return false;
 
   // Never proxy calls that are already our proxies
   if (callee.type === 'Identifier' && (callee.name === fcName || callee.name === mcName)) {
@@ -121,25 +84,12 @@ function buildProxyDecl(name: string, code: string): any {
  * Apply proxy function wrapping to all eligible call expressions.
  *
  * Simple calls:  foo(x, y)       → _fc(foo, x, y)
- * Method calls:  obj.method(x)   → _mc(obj, "method", x)
- * Computed:      obj[expr](x)    → _mc(obj, expr, x)
+ * Method calls:  obj.method(x)   → _mc(obj, "method")(x)
+ * Computed:      obj[expr](x)    → _mc(obj, expr)(x)
  *
- * Two dispatcher functions are prepended to the program:
- *
- *   _fc: function() {
- *     var fn = arguments[0];
- *     var a = [];
- *     for (var i = 1; i < arguments.length; i++) a.push(arguments[i]);
- *     return fn.apply(void 0, a);
- *   }
- *
- *   _mc: function() {
- *     var o = arguments[0];
- *     var p = arguments[1];
- *     var a = [];
- *     for (var i = 2; i < arguments.length; i++) a.push(arguments[i]);
- *     return o[p].apply(o, a);
- *   }
+ * The method dispatcher resolves the target and returns an invocation closure.
+ * Lookup errors precede argument evaluation; non-callable targets throw only
+ * when the closure is invoked, after source arguments have been evaluated.
  *
  * Runs before identifier passes so proxy names get obfuscated.
  */
@@ -148,8 +98,8 @@ export function applyProxyFunctions(ast: any): void {
   const mcName = gen();
 
   // Build proxy function declarations.
-  // Use Function.prototype.apply/call for resilience — these references
-  // are captured once and can't be broken by property key encoding.
+  // Use built-in apply so target functions may safely have an own .apply.
+  // Each method resolver captures the target and apply for its invocation.
   const fcDecl = buildProxyDecl(fcName, `function() {
     var _apply = Function.prototype.apply;
     var fn = arguments[0];
@@ -162,11 +112,10 @@ export function applyProxyFunctions(ast: any): void {
     var _apply = Function.prototype.apply;
     var o = arguments[0];
     var p = arguments[1];
-    var a = [];
-    for (var i = 2; i < arguments.length; i++) a.push(arguments[i]);
     var m = o[p];
-    if (typeof m === "function") return _apply.call(m, o, a);
-    return m;
+    return function() {
+      return _apply.call(m, o, arguments);
+    };
   };`);
 
   // Collect replacements
@@ -181,8 +130,9 @@ export function applyProxyFunctions(ast: any): void {
       const callee = node.callee;
 
       if (callee.type === 'MemberExpression' || callee.type === 'OptionalMemberExpression') {
-        // Method call: obj.method(x) → _mc(obj, "method", x)
-        //              obj[expr](x)  → _mc(obj, expr, x)
+        // Resolve the receiver/property before evaluating call arguments.
+        // The returned closure invokes that exact target with its receiver;
+        // apply also throws for non-callables, after arguments have run.
         const obj = callee.object;
         let prop: any;
 
@@ -198,8 +148,10 @@ export function applyProxyFunctions(ast: any): void {
 
         replacements.push({
           node,
-          newCallee: id(mcName),
-          newArgs: [obj, prop, ...node.arguments],
+          newCallee: {
+            type: 'CallExpression', callee: id(mcName), arguments: [obj, prop],
+          },
+          newArgs: node.arguments,
         });
 
       } else {

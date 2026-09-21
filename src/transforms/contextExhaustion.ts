@@ -1,16 +1,7 @@
-import * as crypto from 'crypto';
+import { randInt, pick } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
-}
 
 // ---- AST builders ----
 
@@ -44,35 +35,6 @@ function seq(...exprs: any[]): any {
 
 function voidExpr(arg: any): any {
   return unary('void', arg);
-}
-
-function iife(params: string[], body: any[], args: any[]): any {
-  return {
-    type: 'CallExpression',
-    callee: paren({
-      type: 'FunctionExpression',
-      id: null,
-      params: params.map(p => id(p)),
-      body: { type: 'BlockStatement', body },
-    }),
-    arguments: args,
-  };
-}
-
-function varDecl(name: string, init: any): any {
-  return {
-    type: 'VariableDeclaration',
-    kind: 'var',
-    declarations: [{ type: 'VariableDeclarator', id: id(name), init }],
-  };
-}
-
-function ret(arg: any): any {
-  return { type: 'ReturnStatement', argument: arg };
-}
-
-function exprStmt(expr: any): any {
-  return { type: 'ExpressionStatement', expression: expr };
 }
 
 // ---- Opaque true/false generators (lightweight, no Math.random dependency) ----
@@ -119,24 +81,6 @@ function opaqueFalse(): any {
 type BloatWrapper = (expr: any) => any;
 
 /**
- * Wrap in an IIFE with junk parameters:
- *   expr → (function(_v, j1, j2, j3) { return _v; })(expr, null, 0, "")
- */
-const iifeWrap: BloatWrapper = (expr) => {
-  const paramName = gen();
-  const junkParams = Array.from({ length: randInt(2, 5) }, () => gen());
-  const junkArgs: any[] = junkParams.map(() =>
-    pick([num(randInt(0, 100)), str(gen()), nul(), bool(false), num(0)])
-  );
-
-  return iife(
-    [paramName, ...junkParams],
-    [ret(id(paramName))],
-    [expr, ...junkArgs],
-  );
-};
-
-/**
  * Wrap in nested ternaries that always resolve to the original value:
  *   expr → (true ? (false ? junk : (true ? expr : junk)) : junk)
  * Depth is 2-4 levels.
@@ -175,20 +119,6 @@ const voidChain: BloatWrapper = (expr) => {
 };
 
 /**
- * Nested identity closures:
- *   expr → (function(a){return a})(  (function(b){return b})(expr)  )
- */
-const nestedIdentity: BloatWrapper = (expr) => {
-  const depth = randInt(2, 4);
-  let result = expr;
-  for (let i = 0; i < depth; i++) {
-    const p = gen();
-    result = iife([p], [ret(id(p))], [result]);
-  }
-  return result;
-};
-
-/**
  * Conditional void noise:
  *   expr → (true ? expr : (void 0, void 0, null))
  *   Wraps the junk side in useless void expressions to add volume.
@@ -208,20 +138,6 @@ const conditionalVoidNoise: BloatWrapper = (expr) => {
   return paren(cond(opaqueFalse(), junk, expr));
 };
 
-/**
- * typeof guard wrap:
- *   expr → (typeof expr !== "undefined" ? expr : expr)
- *   Both branches return expr, but it looks like a safety check.
- *   Only works for identifier expressions.
- */
-const typeofGuard: BloatWrapper = (expr) => {
-  return paren(cond(
-    bin('!==', unary('typeof', expr), str('undefined')),
-    expr,
-    expr,
-  ));
-};
-
 const WRAPPERS: BloatWrapper[] = [
   nestedTernary,
   voidChain,
@@ -230,170 +146,13 @@ const WRAPPERS: BloatWrapper[] = [
   voidChain,       // double weight — safe and verbose
 ];
 
-// ---- Statement-level bloat generators ----
-// These inject entirely new statements between existing ones.
-
-/**
- * Generate a junk self-referencing closure that computes nothing useful.
- * Returns a var declaration + invocation as statements.
- */
-function junkClosure(): any[] {
-  const fnName = gen();
-  const param = gen();
-  const local1 = gen();
-  const local2 = gen();
-  const depth = randInt(1, 3);
-
-  let body: any[] = [
-    varDecl(local1, bin('+', id(param), num(randInt(1, 50)))),
-    varDecl(local2, bin('*', id(local1), num(randInt(2, 7)))),
-  ];
-
-  // Add nested loops / conditionals for volume
-  for (let i = 0; i < depth; i++) {
-    const tmp = gen();
-    body.push(
-      varDecl(tmp, bin('^', id(local2), num(randInt(1, 255)))),
-      exprStmt(bin('+', id(tmp), num(randInt(0, 100)))),
-    );
-  }
-
-  body.push(ret(id(local2)));
-
-  return [
-    varDecl(fnName, {
-      type: 'FunctionExpression',
-      id: null,
-      params: [id(param)],
-      body: { type: 'BlockStatement', body },
-    }),
-    exprStmt({
-      type: 'CallExpression',
-      callee: id(fnName),
-      arguments: [num(randInt(0, 100))],
-    }),
-  ];
-}
-
-/**
- * Generate a redundant variable aliasing chain.
- *   var _a = <junk>; var _b = _a; var _c = _b; void _c;
- */
-function aliasingChain(): any[] {
-  const length = randInt(3, 6);
-  const names: string[] = [];
-  const stmts: any[] = [];
-
-  for (let i = 0; i < length; i++) {
-    const name = gen();
-    names.push(name);
-    if (i === 0) {
-      stmts.push(varDecl(name, bin('+', num(randInt(0, 100)), num(randInt(0, 100)))));
-    } else {
-      stmts.push(varDecl(name, id(names[i - 1])));
-    }
-  }
-
-  // End with a void to "use" the last variable
-  stmts.push(exprStmt(voidExpr(id(names[names.length - 1]))));
-  return stmts;
-}
-
-/**
- * Generate a do-nothing for loop that wastes tokens.
- */
-function junkLoop(): any[] {
-  const counter = gen();
-  const acc = gen();
-  const limit = randInt(2, 8);
-
-  return [
-    varDecl(acc, num(0)),
-    {
-      type: 'ForStatement',
-      init: varDecl(counter, num(0)),
-      test: bin('<', id(counter), num(limit)),
-      update: { type: 'UpdateExpression', operator: '++', argument: id(counter), prefix: false },
-      body: {
-        type: 'BlockStatement',
-        body: [
-          exprStmt({
-            type: 'AssignmentExpression',
-            operator: '+=',
-            left: id(acc),
-            right: bin('^', id(counter), num(randInt(1, 100))),
-          }),
-        ],
-      },
-    },
-    exprStmt(voidExpr(id(acc))),
-  ];
-}
-
-const STMT_BLOATERS: (() => any[])[] = [
-  junkClosure,
-  aliasingChain,
-  junkLoop,
-];
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
-
 // ---- Main transform ----
 
 /**
  * Apply context window exhaustion to the AST.
  *
- * Two strategies applied to function bodies and program body:
- *
- * 1. **Expression bloating**: Existing expression statements have their
- *    expressions wrapped in verbose but semantically transparent constructs
- *    (IIFEs, nested ternaries, void chains, identity closures).
- *
- * 2. **Statement injection**: Entirely new junk statements are inserted
- *    between existing ones (self-referencing closures, aliasing chains,
- *    dead loops).
+ * Wrap expression statements in nested ternaries and void-expression noise
+ * within function bodies and the program body.
  *
  * All generated code uses fresh variable names (via gen()) that will be
  * further obfuscated by subsequent identifier passes.

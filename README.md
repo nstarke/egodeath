@@ -82,7 +82,7 @@ The obfuscator applies 20 transforms across 4 phases. Each stage builds on the p
 |-------|-----------|------|-------------|
 | 4 | **Control Flow Flattening** | `transforms/controlFlowFlattening.ts` | Converts function bodies into `while(true) { switch((_s * P) % M) { ... } }` state machines with **modular arithmetic dispatch** — case values are encoded through `(stateId * multiplier) % modulus` using random prime parameters. *[Paper 3]* |
 | 5 | **Opaque Predicates** | `transforms/opaquePredicates.ts` | Injects `if` conditions that always evaluate to true or false but are mathematically hard to prove (e.g., `(x*x+x)%2===0`). 15 predicate formulas across modular arithmetic, bitwise, and type-check categories. |
-| 6 | **Proxy Functions** | `transforms/proxyFunctions.ts` | Routes all function calls through two dispatchers: `_fc(fn, ...args)` for simple calls, `_mc(obj, prop, ...args)` for method calls. Uses `Function.prototype.apply` captured in a local variable for resilience. |
+| 6 | **Proxy Functions** | `transforms/proxyFunctions.ts` | Routes all function calls through two dispatchers: `_fc(fn, ...args)` for simple calls, `_mc(obj, prop)(...args)` for method calls, preserving method lookup before argument evaluation. Uses `Function.prototype.apply` captured in a local variable for resilience. |
 | 7 | **Context Window Exhaustion** | `transforms/contextExhaustion.ts` | Wraps expressions in deeply nested ternaries with opaque conditions, void-expression chains, and conditional void padding. Forces LLMs to waste context window tokens on noise. |
 | 8 | **Comma Expression Merging** | `transforms/commaExpressions.ts` | Collapses consecutive expression statements into single comma expressions: `a(); b(); return c()` becomes `return a(), b(), c()`. |
 
@@ -99,10 +99,10 @@ The obfuscator applies 20 transforms across 4 phases. Each stage builds on the p
 | Order | Transform | File | Description |
 |-------|-----------|------|-------------|
 | 12 | **Global Variable Encoding** | `transforms/globalVariableEncoding.ts` | Replaces references to globals (dynamically discovered from `globalThis` + `window` package) with `eval("Name<suffix>".replace(new RegExp("<suffix>$"), ""))`. Both strings flow through the string array. |
-| 13 | **Property Key Encoding** | `transforms/propertyKeyEncoding.ts` | Converts dot access to computed access with per-scope registries. Cross-scope access works because all suffixes resolve to the same property name at runtime via `.replace()`. |
+| 13 | **Property Key Encoding** | `transforms/propertyKeyEncoding.ts` | Converts dot access to computed access with per-scope registries. Cross-scope access works because all suffixes resolve to the same property name via `.replace()`. Function-scope keys are decoded once on first invocation and cached across calls. |
 | 14 | **Number Encoding** | `transforms/numberEncoding.ts` | 11 encoding strategies: shift+add, XOR identity, complement, division, nested shifts, double-NOT, modular, etc. Each instance uniquely generated. Skips property keys and switch case values. |
 | 15 | **Self-Integrity Verification** | `transforms/selfIntegrity.ts` | Injects 2-4 runtime checks: eval native-code verification, `Function.prototype.toString` integrity, timing anomaly detection, code structure validation. Anti-tamper responses: busy wait, throw, silent corruption. *[Paper 10]* |
-| 16 | **String Array Extraction** | `transforms/stringArrayExtraction.ts` | Collects all strings into a single array with **chained XOR decryption** (key for entry N depends on decoded content of entry N-1) and **sparse position-dependent error patterns** (each character gets a different XOR key, with LPN-inspired sparse errors at select positions). *[Papers 2, 9]* |
+| 16 | **String Array Extraction** | `transforms/stringArrayExtraction.ts` | Collects all strings into a single array with **chained XOR decryption** (key for entry N depends on decoded content of entry N-1) and **sparse position-dependent error patterns** (each character gets a different XOR key, with LPN-inspired sparse errors at select positions). The decoder caches the prefix through the requested index and resumes on later calls, leaving unused tail decoys encoded. *[Papers 2, 9]* |
 | 17 | **Console Stubs** | `obfuscator.ts` | Dynamically discovers all `console` methods and sets each to a no-op function. |
 | 18 | **Terser Minification** | `obfuscator.ts` | Strips whitespace/formatting via terser (`mangle: false`, `compress: false`). Falls back to regex-based stripping if terser can't parse the output. |
 
@@ -221,6 +221,9 @@ tests/
 # Run all tests
 npm test
 
+# Offline runtime benchmarks for generated helpers and a full-pipeline workload
+npm run benchmark:transforms
+
 # Run a specific test suite
 npx jest controlFlowFlattening
 npx jest tripwires
@@ -253,3 +256,5 @@ The `tools/obfuscate-package.ts` tool tests the obfuscator against real npm pack
 ## License
 
 MIT - Copyright 2026 Nicholas Starke
+
+See [the code and generated-runtime audit](docs/code-runtime-audit.md) for cleanup details, measured performance changes, tradeoffs, and follow-up opportunities.

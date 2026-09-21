@@ -9,15 +9,13 @@ function parse(code: string): any {
 }
 
 describe('chained string decryption (Paper 2)', () => {
-  it('decodes the entire chain on first access', () => {
+  it('emits an incremental chain decoder', () => {
     const code = 'var a = "Hello"; var b = "World";';
     const ast = parse(code);
     applyStringArrayExtraction(ast);
     const out = recast.print(ast).code;
 
-    // Should contain a chain-decoded flag variable
-    expect(out).toContain('= false');
-    // Should contain a for-loop that iterates over the full array
+    // The decode loop resumes from the saved cursor to the requested index.
     expect(out).toContain('for (');
     // Should contain the rolling-key chain propagation. The decoder's locals
     // are now generated via gen(), so match the structure rather than the

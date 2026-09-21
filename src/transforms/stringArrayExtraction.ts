@@ -1,4 +1,5 @@
-import * as crypto from 'crypto';
+import { randInt, shuffle } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import * as recast from 'recast';
 import { gen } from '../random';
@@ -14,8 +15,8 @@ import { gen } from '../random';
 // Chain: key[0] = seed
 //        key[i] = (key[i-1] ^ simpleHash(string[i-1]) ^ (i * prime)) & 0xFF || 1
 //
-// At runtime, the accessor must decode the entire chain on first call,
-// then cache all results. Individual subsequent accesses are O(1).
+// At runtime, decode only the prefix needed by the requested index. Keep
+// the rolling key and cursor so later calls resume, and cached reads are O(1).
 
 /**
  * Simple hash of a string — sum of char codes modulo 256.
@@ -104,60 +105,6 @@ function sparseXorEncode(
   return hex;
 }
 
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = crypto.randomBytes(4).readUInt32BE(0) % (i + 1);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
-
 // ---- Exclusion checks ----
 
 function isRequireCall(parent: any): boolean {
@@ -208,12 +155,6 @@ function shouldExclude(node: any, parent: any): boolean {
 
 // ---- Core transform ----
 
-interface StringEntry {
-  value: string;
-  /** Index in the final (post-rotation) array */
-  finalIndex: number;
-}
-
 // ---- Cross-file decoy pool ----
 //
 // obfuscateMultiple() seeds this before each per-file obfuscate()
@@ -226,10 +167,7 @@ interface StringEntry {
 // similar character distribution, so you can't tell which file is
 // which by eyeballing the array preamble.
 //
-// The pool is a pre-shuffled list with an optional base size. Each
-// call to getAndClearStringArrayDecoys() returns what was set and
-// resets the state, following the same module-singleton pattern
-// setDonorStatements uses for dead-code donors.
+// The batch caller installs each file's decoys and clears them in finally.
 
 let pendingDecoys: string[] | null = null;
 
@@ -242,16 +180,15 @@ export function clearStringArrayDecoys(): void {
 }
 
 /**
- * Apply string array extraction + rotation to an AST.
+ * Extract strings into a shuffled, chained XOR array.
  *
  * 1. Walk AST, collect all eligible string literals, deduplicate
  * 2. Shuffle strings, assign each a final index
- * 3. Pick a rotation offset R and base index offset B
- * 4. Pre-rotate the array so after runtime rotation it's in the right order
- * 5. Replace each string literal with accessorFn(finalIndex + B)
- * 6. Prepend: array declaration, rotation IIFE, accessor function
+ * 3. Append cross-file decoys and encode the chain in order
+ * 4. Replace literals with accessorFn(finalIndex + baseOffset)
+ * 5. Prepend the encoded array and a cached, incremental decoder
  */
-export function applyStringArrayExtraction(ast: any, budget?: any): void {
+export function applyStringArrayExtraction(ast: any, _budget?: any): void {
   const arrayName = gen();
   const accessorName = gen();
 
@@ -270,7 +207,7 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   // ---- Pass 1: Collect strings ----
 
   const stringMap = new Map<string, number>(); // value → finalIndex
-  const replacements: { node: any; parent: any }[] = [];
+  const replacements: any[] = [];
 
   estraverse.traverse(ast.program, {
     keys: VISITOR_KEYS,
@@ -286,7 +223,7 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
       if (!stringMap.has(val)) {
         stringMap.set(val, 0); // index assigned after shuffle
       }
-      replacements.push({ node, parent });
+      replacements.push(node);
     },
     fallback: 'iteration',
   } as any);
@@ -331,7 +268,7 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
 
   // ---- Pass 2: Replace string nodes with accessor calls ----
 
-  for (const { node } of replacements) {
+  for (const node of replacements) {
     const val = node.value as string;
     const finalIndex = stringMap.get(val)!;
     const encodedIndex = finalIndex + baseOffset;
@@ -350,24 +287,10 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
 
   // ---- Build preamble AST ----
 
-  // 1. var _arr = [encoded("str1"), encoded("str2"), ...];
-  //
-  // Two encoding modes:
-  //   - jsfuck: maximum obfuscation, ~1000x expansion (budget permitting)
-  //   - XOR+hex: compact encoding, ~2x expansion, decoded at runtime
-  //
-  // XOR+hex strings look like "4a1f3c..." — meaningless hex. The accessor
-  // function XOR-decodes them with a position-derived key at runtime.
-  // jsfuck strings are JavaScript expressions that evaluate to the string.
-  //
-  // The encoding mode is per-string: first `jsfuckLimit` strings use jsfuck,
-  // the rest use XOR+hex. This lets the budget control the bloat.
-
   // Chained XOR+hex encoding (Paper 2: Kilian-style randomization).
   // Each string's key depends on the decoded content of the previous string.
   // The orderedStrings array is encoded with chained keys — decoding entry N
   // requires knowing the decoded content of entry N-1.
-  const arrayLen = orderedStrings.length;
   const chainKeys = computeChainKeys(orderedStrings, xorSeed, xorPrime);
   const arrayElements = orderedStrings.map((s, idx) => {
     const hex = sparseXorEncode(s, chainKeys[idx], errorSeed, errorPrime, errorMod, errorThreshold);
@@ -387,30 +310,16 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
     }],
   };
 
-  // 2. Chained accessor function (Paper 2: Kilian-style)
-  //
-  // On first call, decodes the ENTIRE chain in order — key for entry N
-  // depends on the decoded content of entry N-1. After the chain is
-  // fully decoded, all strings are cached for O(1) access.
-  //
-  // The chain decryption uses the same simpleStringHash and key derivation
-  // as the build-time encoding, but in reverse (decode with the key,
-  // then derive the next key from the decoded content).
+  // Decode only as far as the requested index, caching the prefix. Tail
+  // decoys remain encoded unless requested, without weakening key chaining.
   const cacheName = gen();
-  const chainDecodedFlag = gen();
-
-  // 2. Chained accessor with sparse XOR decoding (Papers 2 + 9)
-  //
-  // Decodes the entire chain on first call. Each character uses a
-  // position-dependent key plus a sparse error pattern — the same
-  // encoding applied at build time, reversed at runtime.
 
   // The accessor's local bindings are generated through gen() too, so the
   // decoder bootstrap doesn't ship readable names like `prevKey`/`posKey`.
   // This transform runs AFTER the firstPass/secondPass rename passes, so any
   // identifier left literal in this template would survive verbatim into the
   // output. gen() never reissues a name, so these can't collide with the
-  // array/accessor/cache/flag names or with anything the passes assigned; as
+  // array/accessor/cache names or with anything the passes assigned; as
   // function-scoped vars they only need to differ from each other anyway.
   const idx = gen();        // accessor param (encoded array index)
   const prevKey = gen();    // rolling chain key
@@ -425,12 +334,13 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
   const ch = gen();         // decoded char code
 
   const accessorCode = `
-  var ${cacheName} = {};
-  var ${chainDecodedFlag} = false;
+  var ${cacheName} = [];
+  var ${prevKey} = ${xorSeed};
+  var ${ci} = 0;
   var ${accessorName} = function(${idx}) {
-    if (!${chainDecodedFlag}) {
-      var ${prevKey} = ${xorSeed};
-      for (var ${ci} = 0; ${ci} < ${arrayLen}; ${ci}++) {
+    ${idx} -= ${baseOffset};
+    if (${ci} <= ${idx}) {
+      for (; ${ci} <= ${idx}; ${ci}++) {
         var ${k} = ((${prevKey} ^ (${ci} * ${xorPrime})) & 255) || 1;
         var ${v} = ${arrayName}[${ci}];
         var ${s} = "";
@@ -449,10 +359,9 @@ export function applyStringArrayExtraction(ast: any, budget?: any): void {
           ${h} = (${h} + ${ch}) & 255;
           ${cpos}++;
         }
-        ${cacheName}[${ci} + ${baseOffset}] = ${s};
+        ${cacheName}[${ci}] = ${s};
         ${prevKey} = (${k} ^ ${h}) & 255;
       }
-      ${chainDecodedFlag} = true;
     }
     return ${cacheName}[${idx}];
   };`;

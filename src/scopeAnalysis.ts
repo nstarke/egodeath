@@ -1,3 +1,4 @@
+import { VISITOR_KEYS as EXTRA_VISITOR_KEYS } from './visitorKeys';
 import * as estraverse from 'estraverse';
 import { ASTNode } from './types';
 import { gen } from './random';
@@ -22,53 +23,6 @@ import { isKeyword } from './keywords';
  * Output is consumed through `substitute()` in the second rename pass,
  * and through `thirdPass` for dummy-param shadow avoidance.
  */
-
-/**
- * estraverse's default visitor keys don't cover modern ESTree + Babel
- * shapes — without these the walker skips ArrowFunction bodies,
- * destructuring patterns, ObjectMethod params, etc., and the analyzer
- * silently misses whole swathes of the tree.
- */
-const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  ClassMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
 
 type ScopeKind = 'module' | 'function' | 'block' | 'catch' | 'class';
 

@@ -1,27 +1,8 @@
-import * as crypto from 'crypto';
+import { randInt, randomSuffix, escapeRegex } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
 import { captureGlobal } from '../capturedGlobals';
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function randomSuffix(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const len = randInt(4, 8);
-  let s = '';
-  for (let i = 0; i < len; i++) {
-    s += chars[crypto.randomBytes(1)[0] % chars.length];
-  }
-  return s;
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 // ---- AST builders ----
 
@@ -254,50 +235,6 @@ function buildAntiDebugIIFE(ast: any): any {
     },
   };
 }
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
 
 // ---- Main transform ----
 

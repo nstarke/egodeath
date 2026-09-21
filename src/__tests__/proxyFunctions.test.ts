@@ -224,3 +224,72 @@ describe('full pipeline with proxy functions', () => {
     expect(out).not.toMatch(/\bfoo\s*\(/);
   });
 });
+
+// Compare observable results and ordering with the original JavaScript.
+describe('method proxy evaluation order', () => {
+  const cases = [
+    {
+      name: 'throws for non-callable properties after evaluating arguments',
+      code: `var events = []; var o = { method: 1 };
+        try { o.method(events.push('argument')); }
+        catch (e) { events.push(e.name); }`,
+      expected: ['argument', 'TypeError'],
+    },
+    {
+      name: 'keeps the method resolved before an argument replaces it',
+      code: `var events = []; var o = { value: 7, method: function() { events.push(this.value); } };
+        o.method(o.method = function() { events.push('replacement'); });`,
+      expected: [7],
+    },
+    {
+      name: 'evaluates receiver, computed key, getter, and arguments once in order',
+      code: `var events = []; var o = { value: 9, get method() {
+          events.push('getter'); return function(x) { events.push(this.value, x); };
+        }};
+        function receiver() { events.push('receiver'); return o; }
+        function key() { events.push('key'); return 'method'; }
+        function argument() { events.push('argument'); return 3; }
+        receiver()[key()](argument());`,
+      expected: ['receiver', 'key', 'getter', 'argument', 9, 3],
+    },
+    {
+      name: 'does not evaluate arguments when a method getter throws',
+      code: `var events = []; var o = { get method() { events.push('getter'); throw 1; } };
+        try { o.method(events.push('argument')); } catch (e) { events.push('caught'); }`,
+      expected: ['getter', 'caught'],
+    },
+    {
+      name: 'allows recursive method calls while retaining each receiver',
+      code: `var events = []; var a = { value: 4, method: function(x) { return this.value + x; } };
+        var b = { value: 8, method: a.method }; events.push(a.method(b.method(2)));`,
+      expected: [14],
+    },
+    {
+      name: 'preserves parenthesized optional method calls',
+      code: `var events = []; var o = null;
+        try { (o?.method)(events.push('argument')); } catch (e) { events.push(e.name); }`,
+      expected: ['argument', 'TypeError'],
+    },
+  ];
+
+  for (const { name, code, expected } of cases) {
+    it(name, () => {
+      expect(new Function(code + ';return events;')()).toEqual(expected);
+      expect(evalTransformed(code, 'events')).toEqual(expected);
+    });
+  }
+
+  it('preserves both fixes through the complete pipeline', () => {
+    const code = `
+      var events = [];
+      var o = { value: 7, method: function() { events.push(this.value); } };
+      o.method(o.method = 1);
+      try { o.method(events.push('argument')); } catch (e) { events.push(e.name); }
+      module.exports = events;
+    `;
+    const out = obfuscate(code, { targetTokens: 2000 });
+    const mod = { exports: {} };
+    new Function('module', 'console', 'setInterval', out)(mod, {}, () => 0);
+    expect(mod.exports).toEqual([7, 'argument', 'TypeError']);
+  });
+});

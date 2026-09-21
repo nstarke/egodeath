@@ -1,6 +1,7 @@
+import { VISITOR_KEYS as EXTRA_VISITOR_KEYS } from './visitorKeys';
 import * as recast from 'recast';
 import * as estraverse from 'estraverse';
-import { ASTNode, PassHandlerMap } from './types';
+import { PassHandlerMap } from './types';
 import { resetGlobals, resetWindowProps } from './globals';
 import {
   resetIssuedNames,
@@ -31,60 +32,13 @@ import { applyNoiseInjection } from './transforms/noiseInjection';
 import { applySelfIntegrity } from './transforms/selfIntegrity';
 import { applyRegexEncoding } from './transforms/regexEncoding';
 import { applyTemplateLiteralFlattening } from './transforms/templateLiteralFlattening';
-import { ObfuscateOptions, DEFAULT_OPTIONS, BloatBudget, computeBloatBudget } from './options';
+import { ObfuscateOptions, DEFAULT_OPTIONS, computeBloatBudget } from './options';
 import { setDonorStatements, clearDonorStatements } from './transforms/deadCodeInjection';
 import { setStringArrayDecoys, clearStringArrayDecoys } from './transforms/stringArrayExtraction';
 import { buildCrossFilePrelude } from './transforms/crossFileTransplant';
 import { makeDispatchPlan, normalizeFileExports, pickSlotForFile } from './transforms/exportNormalization';
 
 const { minify_sync } = require('terser');
-
-/**
- * Extended visitor keys for modern AST node types that estraverse
- * doesn't know about natively. Without these, estraverse skips
- * traversal into these nodes.
- */
-const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-
-  // Babel-specific node types (babel parser uses these instead of ESTree equivalents)
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
 
 function runPass(ast: any, handlers: PassHandlerMap): void {
   estraverse.traverse(ast.program, {
@@ -259,8 +213,8 @@ export function obfuscate(code: string, options?: Partial<ObfuscateOptions>): st
   // stringArrayExtraction so the emitted literals get collected.
   applyTemplateLiteralFlattening(ast);
 
-  // Post-transform: string array extraction + rotation
-  // Collects all string literals into a rotated array, replaces with accessor calls
+  // Post-transform: chained string array extraction
+  // Collects strings into an encoded array, replaces them with accessor calls
   // Runs last so it captures all strings including global+property name strings
   applyStringArrayExtraction(ast, budget);
 
@@ -771,12 +725,8 @@ export function obfuscateMultiple(
   //
   // We parse each output, find the string array, compute the max
   // length, and pad every shorter array by appending hex entries
-  // borrowed from siblings — the hex is valid, the same character-
-  // length distribution as the rest of the file's array, and we
-  // also bump the accessor's hardcoded loop bound so the decoder
-  // processes the appended entries (they decode to garbage the
-  // runtime never reads, but the arrayLen-vs-array-length shape
-  // stays consistent for a static inspector).
+  // borrowed from siblings. The incremental decoder only visits requested
+  // prefixes, so padding needs no decoder-bound rewrite and stays inert.
   return normalizeStringArrays(results);
 }
 
@@ -811,48 +761,13 @@ function findStringArrayDecl(program: any): { arrayExpr: any } | null {
 }
 
 /**
- * Find the accessor's outer decode loop — the ForStatement whose
- * header matches `for (var ci = 0; ci < <N>; ci++)` with a numeric
- * right-hand side equal to `currentLen`.  The inner character-by-
- * character loop uses `<v>.length` on its right (not a literal), so
- * the value-match disambiguates even though both loops share the
- * same skeleton. Returns the NumericLiteral so the caller can bump
- * its `.value`.
- */
-function findAccessorLengthLiteral(program: any, currentLen: number): any | null {
-  let found: any = null;
-  estraverse.traverse(program, {
-    keys: EXTRA_VISITOR_KEYS,
-    enter(node: any) {
-      if (found) return (estraverse as any).VisitorOption.Break;
-      if (node.type !== 'ForStatement') return;
-      if (!node.test || node.test.type !== 'BinaryExpression') return;
-      if (node.test.operator !== '<') return;
-      const right = node.test.right;
-      if (!right) return;
-      if (right.type === 'NumericLiteral' || (right.type === 'Literal' && typeof right.value === 'number')) {
-        if (right.value === currentLen) {
-          found = right;
-          return (estraverse as any).VisitorOption.Break;
-        }
-      }
-    },
-    fallback: 'iteration',
-  } as any);
-  return found;
-}
-
-/**
  * Equalize every file's string-array length to the longest by
- * appending hex entries borrowed from siblings. Accessor
- * `arrayLen` constants are updated in lockstep so the decoder
- * iterates the full array.
+ * appending hex entries borrowed from siblings. No accessor indexes change.
  *
  * Appended entries are valid hex drawn from other files' real
  * arrays — same encoding stride (multiple of 4 chars), same
- * statistical shape. The decoder will produce garbage strings for
- * them when the chain decodes, but those cache slots are never
- * accessed by any code in the file, so the garbage is inert.
+ * statistical shape. No source access references the appended indexes,
+ * so incremental decoding leaves the padding untouched.
  */
 function normalizeStringArrays(
   results: { filename: string; code: string }[],
@@ -867,7 +782,6 @@ function normalizeStringArrays(
     filename: string;
     ast: any;
     arrayExpr: any;
-    lenLiteral: any | null;
     currentLen: number;
   }
   const states: FileState[] = [];
@@ -876,17 +790,16 @@ function normalizeStringArrays(
     try {
       ast = recast.parse(r.code, { parser: require('recast/parsers/babel') });
     } catch {
-      states.push({ filename: r.filename, ast: null, arrayExpr: null, lenLiteral: null, currentLen: 0 });
+      states.push({ filename: r.filename, ast: null, arrayExpr: null, currentLen: 0 });
       continue;
     }
     const found = findStringArrayDecl(ast.program);
     if (!found) {
-      states.push({ filename: r.filename, ast, arrayExpr: null, lenLiteral: null, currentLen: 0 });
+      states.push({ filename: r.filename, ast, arrayExpr: null, currentLen: 0 });
       continue;
     }
     const currentLen = found.arrayExpr.elements.length;
-    const lenLiteral = findAccessorLengthLiteral(ast.program, currentLen);
-    states.push({ filename: r.filename, ast, arrayExpr: found.arrayExpr, lenLiteral, currentLen });
+    states.push({ filename: r.filename, ast, arrayExpr: found.arrayExpr, currentLen });
   }
 
   // Gather the hex pool: every encoded entry from every file's array,
@@ -918,7 +831,6 @@ function normalizeStringArrays(
       const hex = hexPool[Math.floor(Math.random() * hexPool.length)];
       st.arrayExpr.elements.push({ type: 'StringLiteral', value: hex });
     }
-    if (st.lenLiteral) st.lenLiteral.value = maxLen;
 
     out.push({ filename: st.filename, code: recast.print(st.ast).code });
   }

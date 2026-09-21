@@ -13,5 +13,6 @@
     "outDir": "../dist-tools"
   },
   "include": ["./**/*", "../src/**/*"],
+  "exclude": ["../src/__tests__"],
   "files": ["../src/declarations.d.ts"]
 }

@@ -11,7 +11,8 @@
     "obfuscate-package": "ts-node --project tools/tsconfig.json tools/obfuscate-package.ts",
     "benchmark": "ts-node --project tools/tsconfig.json tools/benchmark.ts",
     "detect-obfuscation": "ts-node --project tools/tsconfig.json tools/obfuscation-detection-test.ts",
-    "adversarial-test": "ts-node --project tools/tsconfig.json tools/adversarial-test.ts"
+    "adversarial-test": "ts-node --project tools/tsconfig.json tools/adversarial-test.ts",
+    "benchmark:transforms": "npm run build && node tools/benchmark-transforms.js"
   },
   "author": "",
   "license": "MIT",
@@ -19,7 +20,6 @@
     "@babel/parser": "^7.29.2",
     "estraverse": "^5.3.0",
     "is-valid-var-name": "^1.0.2",
-    "jsfuck": "^0.4.0",
     "recast": "^0.23.11",
     "terser": "^5.46.1",
     "window": "^4.2.7"

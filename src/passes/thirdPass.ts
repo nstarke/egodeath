@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { ASTNode, IdentifierNode, PassHandlerMap } from '../types';
+import { IdentifierNode, PassHandlerMap } from '../types';
 import { gen } from '../random';
 import { Identifier } from '../ast';
 import { getScopeAnalysis } from '../scopeAnalysis';

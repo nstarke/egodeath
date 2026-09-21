@@ -1,78 +1,11 @@
-import * as crypto from 'crypto';
+import { randomSuffix, escapeRegex } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { captureGlobal } from '../capturedGlobals';
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-/**
- * Generate a random alphanumeric suffix of length 4-8.
- */
-function randomSuffix(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const len = randInt(4, 8);
-  let s = '';
-  for (let i = 0; i < len; i++) {
-    s += chars[crypto.randomBytes(1)[0] % chars.length];
-  }
-  return s;
-}
-
-/**
- * Escape special regex characters in a string.
- */
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 // ---- Globals to encode ----
 
 import { getEncodableGlobals } from '../keywords';
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
 
 // ---- AST helpers ----
 
@@ -84,7 +17,7 @@ function id(name: string): any {
  * Build: eval( "Name<suffix>".replace(new RegExp("<suffix>$"), "") )
  *
  * Both StringLiterals ("Name<suffix>" and "<suffix>$") will be
- * picked up by string array extraction and jsfuck-encoded.
+ * picked up by string array extraction and XOR-encoded.
  */
 function buildEvalReplace(ast: any, globalName: string): any {
   const suffix = randomSuffix();
@@ -218,7 +151,7 @@ function isGlobalReference(node: any, parent: any): boolean {
  *   eval("MathxK92q".replace(/xK92q$/, "")).random()
  *
  * The "MathxK92q" string will be picked up by string array extraction,
- * placed in the rotated array, and jsfuck-encoded — making the global
+ * placed in the chained array, and XOR-encoded — making the global
  * name completely invisible in the final output.
  */
 /**
