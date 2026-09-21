@@ -125,19 +125,19 @@ describe('analyzeScopes', () => {
     // Intentionally avoid names that happen to be on the keyword list
     // (e.g. `rest`, `length`, `body`) — those get left at their source
     // spelling on purpose, so they're never in resolvedNames.
-    const ast = parse('const {alpha, beta: [gamma, ...delta]} = srcObj; alpha; gamma; delta;');
+    const ast = parse('const {aVal, bKey: [cVal, ...dVal]} = srcObj; aVal; cVal; dVal;');
     const a = analyzeScopes(ast.program);
-    for (const name of ['alpha', 'gamma', 'delta']) {
+    for (const name of ['aVal', 'cVal', 'dVal']) {
       const nodes = identsByName(ast, name);
       expect(nodes.length).toBeGreaterThanOrEqual(2);
       const first = a.resolvedNames.get(nodes[0]);
       expect(first).toBeDefined();
       expect(nodes.every((n) => a.resolvedNames.get(n) === first)).toBe(true);
     }
-    // `srcObj` is free, `beta` is a non-computed property key (skip).
+    // `srcObj` is free, `bKey` is a non-computed property key (skip).
     const objNodes = identsByName(ast, 'srcObj');
     expect(a.freeReferences.has(objNodes[0])).toBe(true);
-    const bNodes = identsByName(ast, 'beta');
+    const bNodes = identsByName(ast, 'bKey');
     expect(a.skipNodes.has(bNodes[0])).toBe(true);
   });
 
@@ -232,9 +232,9 @@ describe('analyzeScopes', () => {
   });
 
   it('merges a static block body with its class scope', () => {
-    const ast = parse('class A { static { let z = 1; z + 1; } }');
+    const ast = parse('class A { static { let zed = 1; zed + 1; } }');
     const a = analyzeScopes(ast.program);
-    const zs = identsByName(ast, 'z');
+    const zs = identsByName(ast, 'zed');
     expect(zs.length).toBe(2);
     const render = a.resolvedNames.get(zs[0]);
     expect(render).toBeDefined();
