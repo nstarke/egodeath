@@ -235,30 +235,48 @@ describe('null circuit quality assessment', () => {
     expect(result.nullFingerprint.varDeclCount).toBeGreaterThan(0);
   });
 
-  it('similarity improves over unobfuscated code', () => {
-    // Without obfuscation, real and null are easily distinguishable.
-    // With obfuscation, the transforms (dead code, CFF, noise) should
-    // make them more similar.
+  it('keeps real and null code structurally comparable after obfuscation', () => {
+    // Guards against a regression where the transforms start leaking the
+    // shape of the input, making a real function trivially separable from
+    // a null one with the same signature.
+    //
+    // FLOOR, NOT AN IMPROVEMENT CLAIM. These two inputs start out very
+    // similar under computeFingerprint (raw similarity is a deterministic
+    // 0.772) because both are short functions with the same parameter
+    // count. Obfuscation adds dead code, string arrays and noise in
+    // different amounts to each, so the obfuscated pair actually scores
+    // *lower* (mean 0.51). 0.3 is a floor roughly one standard deviation
+    // below that mean, not a claim that obfuscation makes the pair more
+    // alike.
     const realCode = 'function f(x) { var a = x + 1; var b = a * 2; return b; }';
-    const nullCode = generateNullFunction('g', 1, 3);
 
-    // Unobfuscated similarity
-    const rawRealFp = computeFingerprint(realCode);
-    const rawNullFp = computeFingerprint(nullCode);
-    const rawSimilarity = computeSimilarity(rawRealFp, rawNullFp);
-
-    // Obfuscated similarity (average over a few runs due to randomness)
-    let totalObfSim = 0;
-    const runs = 3;
+    // obfuscate() draws from crypto.randomBytes with no seed hook, so a
+    // single run is very noisy: measured over 195 samples, per-run
+    // similarity spans 0.19-0.91 with a standard deviation of 0.198.
+    // Averaging 11 runs cuts the standard error to 0.060, which puts the
+    // 0.3 floor 3.6 standard errors below the mean. Bootstrapping those
+    // samples, 3 runs would trip this assertion roughly once per 40 CI
+    // runs; 11 runs about once per 28,000. Lower this count and the
+    // flakiness comes back.
+    const runs = 11;
+    const floor = 0.3;
+    let totalObfSimilarity = 0;
+    const observed: number[] = [];
     for (let i = 0; i < runs; i++) {
-      const result = runNullCircuitTest(realCode, 1, 3, 0, 10000);
-      totalObfSim += result.similarity;
+      const { similarity } = runNullCircuitTest(realCode, 1, 3, 0, 10000);
+      observed.push(similarity);
+      totalObfSimilarity += similarity;
     }
-    const avgObfSimilarity = totalObfSim / runs;
+    const avgObfSimilarity = totalObfSimilarity / runs;
 
-    // Both obfuscated versions should have non-trivial similarity
-    // (both get padded with dead code, string arrays, etc.)
-    // The key insight: obfuscation should not make them MORE distinguishable
-    expect(avgObfSimilarity).toBeGreaterThan(0.3);
+    // The matcher prints only the mean, which cannot tell a real regression
+    // from an unlucky draw, so surface every sample before asserting.
+    if (!(avgObfSimilarity > floor)) {
+      throw new Error(
+        `mean similarity over ${runs} runs was ${avgObfSimilarity.toFixed(4)}, ` +
+          `expected > ${floor}. Samples: ${observed.map((v) => v.toFixed(3)).join(', ')}`,
+      );
+    }
+    expect(avgObfSimilarity).toBeGreaterThan(floor);
   });
 });

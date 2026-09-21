@@ -37,7 +37,31 @@ module.exports = {
       diagnostics: false,
     }],
   },
-  // Empty so the ESM packages above are not skipped; Jest ignores all of
-  // node_modules by default.
-  transformIgnorePatterns: [],
+  // Jest ignores all of node_modules by default, which would skip the
+  // transform above. Un-ignore exactly the ESM packages reachable from
+  // jsdom so everything else keeps its fast path -- transforming the whole
+  // of node_modules costs about 175s per cold-cache run of the full suite
+  // (measured on Node 22: 451s with an empty list, 277s with this one).
+  //
+  // To regenerate after a jsdom upgrade, list the packages whose
+  // package.json has "type": "module" in jsdom's require graph. A stale
+  // list surfaces as "Must use import to load ES Module: <path>" -- add
+  // the package from that path here.
+  transformIgnorePatterns: [
+    `/node_modules/(?!(?:${[
+      '@asamuzakjp/css-color',
+      '@asamuzakjp/dom-selector',
+      '@bramus/specificity',
+      '@csstools/color-helpers',
+      '@csstools/css-calc',
+      '@csstools/css-color-parser',
+      '@csstools/css-parser-algorithms',
+      '@csstools/css-tokenizer',
+      '@exodus/bytes',
+      'css-tree',
+      'entities',
+      'parse5',
+      'tough-cookie',
+    ].join('|')})/)`,
+  ],
 };
