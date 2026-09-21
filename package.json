@@ -21,8 +21,8 @@
     "estraverse": "^5.3.0",
     "is-valid-var-name": "^1.0.2",
     "jsdom": "^26.1.0",
-    "recast": "^0.23.11",
-    "terser": "^5.46.1"
+    "recast": "^0.24.0",
+    "terser": "^5.51.2"
   },
   "devDependencies": {
     "@types/estraverse": "^5.1.7",
