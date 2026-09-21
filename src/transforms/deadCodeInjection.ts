@@ -1,15 +1,6 @@
+import { randInt, pick } from '../transformHelpers';
 import * as crypto from 'crypto';
 import { gen } from '../random';
-
-// ---- Randomness helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
-}
 
 function pickN<T>(arr: T[], n: number): T[] {
   const copy = [...arr];
@@ -101,10 +92,6 @@ function forLoop(initName: string, limit: any, body: any[]): any {
   };
 }
 
-function ret(arg: any): any {
-  return { type: 'ReturnStatement', argument: arg };
-}
-
 // ---- Cross-file donor statement pool ----
 // When obfuscating multiple files, donor statements from ALL files are
 // collected here so that dead code in file A can be mutated from code
@@ -187,7 +174,7 @@ const loopAccumulate: DeadCodeTemplate = (scopeVars) => {
 /**
  * Build an array, push items in a loop, then access an element.
  */
-const arrayBuild: DeadCodeTemplate = (scopeVars) => {
+const arrayBuild: DeadCodeTemplate = () => {
   const arr = gen();
   const i = gen();
   const tmp = gen();

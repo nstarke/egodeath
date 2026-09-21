@@ -1,38 +1,8 @@
+import { randInt, pick } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
-
-/**
- * Punctured Program Tripwires (Paper 4: Sahai & Waters)
- *
- * Embeds hidden conditional checks throughout the obfuscated code.
- * Each tripwire compares a runtime-derived value against a secret hash.
- * When triggered, the tripwire corrupts program state, making subsequent
- * operations produce wrong results silently.
- *
- * The checks are computationally indistinguishable from real validation
- * code — they use the same AST patterns as legitimate conditionals.
- * The secret input that triggers the tripwire is hidden behind a hash,
- * so an attacker sees the hash but can't determine what triggers it.
- *
- * Tripwires serve multiple purposes:
- * - Anti-tampering: if an attacker modifies the code to bypass checks,
- *   tripwires in other locations corrupt state
- * - Analysis resistance: the tripwire branches look like real code paths,
- *   forcing an analyzer to consider them as potentially reachable
- * - Watermarking: each obfuscation instance has unique tripwire hashes,
- *   enabling identification of specific builds
- */
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
-}
 
 function randomHex(bytes: number): string {
   return crypto.randomBytes(bytes).toString('hex');
@@ -366,50 +336,6 @@ function buildPayload(scopeVars: string[]): any[] {
   ];
   return pick(payloads)();
 }
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
 
 // ---- Main transform ----
 

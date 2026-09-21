@@ -1,38 +1,7 @@
-import * as crypto from 'crypto';
+import { randInt, pick } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
-
-/**
- * LPN-Inspired Noise Injection (Paper 7: Jain, Lin, Sahai)
- *
- * Based on the Learning Parity with Noise (LPN) assumption from the
- * breakthrough iO paper. LPN works by adding random errors to linear
- * equations, making them unsolvable without the secret.
- *
- * We apply this principle to numeric computations: inject random noise
- * values that are added and then cancelled out through a complex path.
- * The intermediate values are meaningless without tracing the full
- * cancellation chain, making static analysis of data flow intractable.
- *
- * For each eligible assignment `x = expr`:
- *   1. Generate a random noise value N
- *   2. Compute the result with noise: x = expr + N
- *   3. Cancel the noise through a separate path: x = x - N
- *
- * The noise and cancellation are split across multiple variables and
- * operations so the pairing is not obvious. The noise variable names
- * and cancellation paths are unique per injection.
- */
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
-}
 
 // ---- AST builders ----
 
@@ -241,50 +210,6 @@ const NOISE_PATTERNS: NoisePattern[] = [
   computedNoise,
   rotateNoise,
 ];
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
 
 // ---- Main transform ----
 

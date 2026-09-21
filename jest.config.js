@@ -14,6 +14,8 @@ module.exports = {
     '^.+\\.ts$': ['ts-jest', {
       tsconfig: {
         types: ['node', 'jest'],
+        noUnusedLocals: false,
+        noUnusedParameters: false,
       },
     }],
   },

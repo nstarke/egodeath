@@ -1,10 +1,7 @@
-import * as recast from 'recast';
 import { ASTNode, PassHandlerMap } from '../types';
 import { substitute, traverseNodeAddSwap, findNested } from '../substitute';
 import { getGlobals } from '../globals';
 import { copyScopeClassification } from '../scopeAnalysis';
-
-const jsfuck = require('jsfuck').JSFuck;
 
 /**
  * Check if the parent node is a require() call.

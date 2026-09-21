@@ -1,7 +1,6 @@
 import * as recast from 'recast';
 import * as crypto from 'crypto';
 
-const recastBabel = require('recast/parsers/babel');
 const babelParser = require('@babel/parser');
 
 /**

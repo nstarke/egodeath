@@ -1,51 +1,8 @@
+import { randInt, pick } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as crypto from 'crypto';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
-
-/**
- * Self-Integrity Verification (Paper 10: Bartusek & Malavolta)
- *
- * Inspired by the "dual-mode" verification concept: the obfuscated
- * program periodically checks its own integrity at runtime. If any
- * part of the code has been modified (by a deobfuscator, patcher,
- * or tampering tool), the hash changes and the anti-tamper response
- * triggers — corrupting state, throwing, or entering a loop.
- *
- * Implementation:
- * 1. At build time, after all other transforms, we inject integrity
- *    check functions into the program body.
- * 2. Each check function captures a snippet of surrounding code as a
- *    string (via Function.prototype.toString on a nearby function),
- *    hashes it, and compares against a placeholder.
- * 3. Since the hash is computed AFTER obfuscation, we use a two-pass
- *    approach: first inject the check with a placeholder, then in
- *    the final output, compute the actual hash and replace placeholders.
- *
- * Actually, since Function.prototype.toString returns the source of
- * a function at runtime, we can compute a hash of the runtime source
- * and compare it against a known value. But the known value depends
- * on the final output, creating a chicken-and-egg problem.
- *
- * Practical solution: instead of hashing the full source, we check
- * structural invariants that tampering would break:
- * - The string array length (if someone removes entries, it changes)
- * - The presence of specific token counts
- * - The typeof checks on key variables
- * - The arguments.length of specific functions
- *
- * These checks are obfuscated and scattered throughout the code,
- * making them hard to locate and remove without breaking the program.
- */
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[crypto.randomBytes(4).readUInt32BE(0) % arr.length];
-}
 
 // ---- AST builders ----
 
@@ -92,7 +49,6 @@ function block(body: any[]): any {
  * semicolon count and triggers the check.
  */
 function buildToStringLengthCheck(targetFnName: string, tamperResponse: any[]): any[] {
-  const hashVar = gen();
   const srcVar = gen();
   const countVar = gen();
 
@@ -114,33 +70,6 @@ function buildToStringLengthCheck(targetFnName: string, tamperResponse: any[]): 
     {
       type: 'IfStatement',
       test: bin('<', id(countVar), num(1)),
-      consequent: block(tamperResponse),
-      alternate: null,
-    },
-  ];
-}
-
-/**
- * Check that the string array exists and has a minimum length.
- *
- * If an attacker inlines all string references and removes the array,
- * this check detects it.
- */
-function buildArrayLengthCheck(arrayName: string, tamperResponse: any[]): any[] {
-  const lenVar = gen();
-
-  return [
-    varDecl(lenVar, {
-      type: 'ConditionalExpression',
-      test: bin('!==',
-        { type: 'UnaryExpression', operator: 'typeof', argument: id(arrayName), prefix: true },
-        str('undefined')),
-      consequent: member(id(arrayName), id('length')),
-      alternate: num(0),
-    }),
-    {
-      type: 'IfStatement',
-      test: bin('<', id(lenVar), num(1)),
       consequent: block(tamperResponse),
       alternate: null,
     },
@@ -269,50 +198,6 @@ function buildThrowError(): any[] {
 function buildTamperResponse(): any[] {
   return pick([buildSilentCorruption, buildBusyWait, buildThrowError])();
 }
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-};
 
 // ---- Main transform ----
 

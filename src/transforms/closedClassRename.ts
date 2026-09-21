@@ -1,3 +1,4 @@
+import { VISITOR_KEYS as EXTRA_VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
 import { ScopeAnalysis } from '../scopeAnalysis';
@@ -49,47 +50,6 @@ import { ScopeAnalysis } from '../scopeAnalysis';
  * `function() { ... }` or `ObjectMethod` does NOT count as a Foo-
  * instance access.
  */
-
-const EXTRA_VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  ClassMethod: ['key', 'params', 'body'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
 
 /**
  * Names we refuse to rename under any circumstance. A mix of:
@@ -304,7 +264,6 @@ function findProvenInstances(
 function collectMethodAccesses(
   ast: any,
   analysis: ScopeAnalysis,
-  candidates: Map<string, ClassCandidate>,
   provenInstances: Map<string, ProvenInstance>,
   methodToClass: Map<string, string | null>,
 ): Map<string, AccessSite[]> {
@@ -477,7 +436,7 @@ export function applyClosedClassRename(ast: any, analysis: ScopeAnalysis): numbe
   }
 
   // --- Step 5: collect and classify every potentially-relevant .X access ---
-  const accesses = collectMethodAccesses(ast, analysis, candidates, provenInstances, methodToClass);
+  const accesses = collectMethodAccesses(ast, analysis, provenInstances, methodToClass);
 
   // --- Step 6: decide which methods are safe to rename ---
   interface SafeRename {

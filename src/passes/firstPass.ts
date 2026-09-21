@@ -1,4 +1,4 @@
-import { ASTNode, PassHandlerMap } from '../types';
+import { PassHandlerMap } from '../types';
 import { gen } from '../random';
 import { getGlobals, addWindowProp, createEntry } from '../globals';
 import { traverseNode, descend } from '../substitute';

@@ -85,11 +85,6 @@ export interface BloatBudget {
   /** Multiplier (0-1) for dead code case count in CFF */
   deadCodeMultiplier: number;
 
-  /** Whether to use XOR+hex encoding for strings (always true now) */
-  useJsfuck: boolean;
-
-  /** Legacy — no longer used with XOR+hex encoding */
-  jsfuckStringLimit: number;
 }
 
 /**
@@ -133,7 +128,5 @@ export function computeBloatBudget(inputChars: number, options: ObfuscateOptions
     contextExhaustionProb,
     opaquePredicateProb,
     deadCodeMultiplier,
-    useJsfuck: true,
-    jsfuckStringLimit: Infinity,
   };
 }

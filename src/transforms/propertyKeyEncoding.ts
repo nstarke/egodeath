@@ -1,71 +1,8 @@
-import * as crypto from 'crypto';
+import { randomSuffix, escapeRegex } from '../transformHelpers';
+import { VISITOR_KEYS } from '../visitorKeys';
 import * as estraverse from 'estraverse';
 import { gen } from '../random';
 import { captureGlobal } from '../capturedGlobals';
-
-// ---- Helpers ----
-
-function randInt(min: number, max: number): number {
-  return min + (crypto.randomBytes(4).readUInt32BE(0) % (max - min + 1));
-}
-
-function randomSuffix(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const len = randInt(4, 8);
-  let s = '';
-  for (let i = 0; i < len; i++) {
-    s += chars[crypto.randomBytes(1)[0] % chars.length];
-  }
-  return s;
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// ---- Visitor keys ----
-
-const VISITOR_KEYS: { [key: string]: string[] } = {
-  ArrowFunctionExpression: ['params', 'body'],
-  SpreadElement: ['argument'],
-  RestElement: ['argument'],
-  TemplateLiteral: ['quasis', 'expressions'],
-  TaggedTemplateExpression: ['tag', 'quasi'],
-  TemplateElement: [],
-  ObjectPattern: ['properties'],
-  ArrayPattern: ['elements'],
-  AssignmentPattern: ['left', 'right'],
-  ClassDeclaration: ['id', 'superClass', 'body'],
-  ClassExpression: ['id', 'superClass', 'body'],
-  ClassBody: ['body'],
-  MethodDefinition: ['key', 'value'],
-  ImportDeclaration: ['specifiers', 'source'],
-  ImportSpecifier: ['imported', 'local'],
-  ImportDefaultSpecifier: ['local'],
-  ImportNamespaceSpecifier: ['local'],
-  ExportNamedDeclaration: ['declaration', 'specifiers', 'source'],
-  ExportDefaultDeclaration: ['declaration'],
-  ExportAllDeclaration: ['source'],
-  ExportSpecifier: ['exported', 'local'],
-  ForOfStatement: ['left', 'right', 'body'],
-  YieldExpression: ['argument'],
-  AwaitExpression: ['argument'],
-  ChainExpression: ['expression'],
-  OptionalMemberExpression: ['object', 'property'],
-  OptionalCallExpression: ['callee', 'arguments'],
-  PropertyDefinition: ['key', 'value'],
-  StaticBlock: ['body'],
-  PrivateIdentifier: [],
-  ObjectProperty: ['key', 'value'],
-  ObjectMethod: ['key', 'params', 'body'],
-  ClassMethod: ['key', 'params', 'body'],
-  ClassProperty: ['key', 'value'],
-  StringLiteral: [],
-  NumericLiteral: [],
-  BooleanLiteral: [],
-  NullLiteral: [],
-  RegExpLiteral: [],
-};
 
 // ---- AST helpers ----
 
@@ -132,9 +69,11 @@ interface Replacement {
  *
  * Each instance gets a unique variable and suffix. The "foo<suffix>"
  * StringLiteral will be picked up by string array extraction and
- * jsfuck-encoded.
+ * XOR-encoded. Function-local keys are cached across invocations while
+ * retaining each scope's independently encoded suffix.
  */
 export function applyPropertyKeyEncoding(ast: any): void {
+  const caches: any[] = [];
   // Process each function body and the program body
   processBody(ast, ast.program.body);
 
@@ -148,11 +87,14 @@ export function applyPropertyKeyEncoding(ast: any): void {
         node.type === 'ObjectMethod';
 
       if (isFn && node.body && node.body.type === 'BlockStatement') {
-        processBody(ast, node.body.body);
+        processBody(ast, node.body.body, caches);
       }
     },
     fallback: 'iteration',
   } as any);
+  if (caches.length) {
+    ast.program.body.unshift({ type: 'VariableDeclaration', kind: 'var', declarations: caches });
+  }
 }
 
 /**
@@ -160,7 +102,7 @@ export function applyPropertyKeyEncoding(ast: any): void {
  * keys, generate encoding variables, prepend declarations, and convert
  * to computed access.
  */
-function processBody(ast: any, body: any[]): void {
+function processBody(ast: any, body: any[], caches?: any[]): void {
   const replacements: Replacement[] = [];
 
   // Walk all nodes in this body to find property accesses
@@ -184,7 +126,21 @@ function processBody(ast: any, body: any[]): void {
   // Generate one var declaration per unique property name
   const varDecls: any[] = [];
   for (const [propName, varName] of propToVar) {
-    varDecls.push(buildPropVarDecl(ast, varName, propName));
+    const decl = buildPropVarDecl(ast, varName, propName);
+    if (caches) {
+      const cacheName = gen();
+      caches.push({ type: 'VariableDeclarator', id: id(cacheName), init: null });
+      // Encoded property names are always nonempty. Keep decoding lazy so
+      // unreachable functions never allocate regexes or decode their keys.
+      decl.declarations[0].init = {
+        type: 'LogicalExpression', operator: '||', left: id(cacheName),
+        right: {
+          type: 'AssignmentExpression', operator: '=', left: id(cacheName),
+          right: decl.declarations[0].init,
+        },
+      };
+    }
+    varDecls.push(decl);
   }
 
   // Apply replacements — morph nodes in place

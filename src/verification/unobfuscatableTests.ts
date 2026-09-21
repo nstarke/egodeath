@@ -244,7 +244,6 @@ export function testUrlLeak(targetTokens: number = 10000): ExtractionAttempt {
   const directMatch = obfuscated.includes(secret);
   const domainMatch = obfuscated.includes('api.internal.example.com');
   const pathMatch = obfuscated.includes('secret-endpoint');
-  const protocolMatch = obfuscated.includes('https://');
 
   return {
     name: 'URL/Endpoint Leak',
