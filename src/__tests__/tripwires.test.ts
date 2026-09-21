@@ -1,4 +1,5 @@
 import { applyTripwires } from '../transforms/tripwires';
+import * as helpers from '../transformHelpers';
 import * as recast from 'recast';
 
 const babelParser = require('recast/parsers/babel');
@@ -144,16 +145,27 @@ describe('tripwire diversity', () => {
     expect(patterns.size).toBeGreaterThanOrEqual(2);
   });
 
-  it('uses different payloads across injections', () => {
-    const payloads = new Set<string>();
-    for (let i = 0; i < 50; i++) {
+  it.each([
+    [0, 'corruption', /\w+\s*=\s*\w+\s*\^\s*\d+/],
+    [1, 'busy loop', /while\s*\(/],
+    [2, 'return corruption', /return\s+-?\d+/],
+    [3, 'exception', /throw\s+new Error/],
+    [4, 'nullification', /= null/],
+  ] as const)('emits payload %i (%s) and preserves normal inputs', (index, _name, pattern) => {
+    // Force injection and exercise every payload instead of hoping that a
+    // small random sample hits multiple payloads through the 20% injection gate.
+    const randomInt = jest.spyOn(helpers, 'randInt').mockImplementation(min => min);
+    const pick = jest.spyOn(helpers, 'pick').mockImplementation(
+      <T>(items: T[]): T => items[index % items.length],
+    );
+    try {
       const out = transform('function f(x, y) { var a = x + y; return a; }');
-      if (out.includes('= null')) payloads.add('nullify');
-      if (out.includes('throw')) payloads.add('throw');
-      if (out.includes('while')) payloads.add('loop');
-      // Check for XOR corruption (param ^ number)
-      if (out.match(/\w+\s*=\s*\w+\s*\^\s*\d+/)) payloads.add('corrupt');
+      expect(out).toMatch(pattern);
+      const fn = new Function(out + '\nreturn f;')();
+      expect(fn(3, 4)).toBe(7);
+    } finally {
+      pick.mockRestore();
+      randomInt.mockRestore();
     }
-    expect(payloads.size).toBeGreaterThanOrEqual(2);
   });
 });

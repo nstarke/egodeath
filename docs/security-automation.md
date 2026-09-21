@@ -24,12 +24,12 @@ npm audit --package-lock-only --include=dev --audit-level=high
 ```
 
 This checks the entire dependency tree, including vulnerabilities already in the
-lockfile. An initial check on September 21, 2026 found 16 affected packages
-(1 low, 8 moderate, 5 high, 2 critical), so the audit job will initially fail until
-the high and critical findings are addressed. The `window` dependency brings in
-an old `jsdom`/`request` chain; npm proposes a breaking downgrade for some of
-these findings. Review dependency changes and run the tests before applying them.
-The workflows do not run `npm audit fix` or suppress existing findings.
+lockfile. The September 21, 2026 audit is clean after replacing the obsolete
+`window` wrapper with jsdom and updating vulnerable transitive dependencies.
+jsdom stays on the 26.x line for compatibility with the CommonJS Jest setup;
+newer majors introduce ESM dependencies. Review dependency changes and run the
+tests before applying them. The workflows do not run `npm audit fix` or suppress
+existing findings.
 
 ## GitHub settings
 
@@ -40,10 +40,11 @@ read access to repository contents; only CodeQL receives permission to upload
 security findings. Pull requests use `pull_request` events, including fork and
 Dependabot pull requests.
 
-Dependency Review requires the repository's dependency graph to be enabled.
+Dependency Review requires the repository's dependency graph to be enabled;
+the dependency graph and Dependabot alerts are enabled for this repository.
 Dependabot **security updates** are a separate repository setting from the weekly
 version updates configured here; they were disabled when this configuration was
-added. Enable Dependabot alerts and security updates under **Settings → Advanced
+added. Enable security updates under **Settings → Advanced
 Security** to request fixes when new advisories are published. CodeQL uses an
 advanced workflow setup; keep the separate CodeQL default setup disabled to avoid
 conflicting analyses.

@@ -98,7 +98,7 @@ The obfuscator applies 20 transforms across 4 phases. Each stage builds on the p
 
 | Order | Transform | File | Description |
 |-------|-----------|------|-------------|
-| 12 | **Global Variable Encoding** | `transforms/globalVariableEncoding.ts` | Replaces references to globals (dynamically discovered from `globalThis` + `window` package) with `eval("Name<suffix>".replace(new RegExp("<suffix>$"), ""))`. Both strings flow through the string array. |
+| 12 | **Global Variable Encoding** | `transforms/globalVariableEncoding.ts` | Replaces references to globals (dynamically discovered from `globalThis` + jsdom) with `eval("Name<suffix>".replace(new RegExp("<suffix>$"), ""))`. Both strings flow through the string array. |
 | 13 | **Property Key Encoding** | `transforms/propertyKeyEncoding.ts` | Converts dot access to computed access with per-scope registries. Cross-scope access works because all suffixes resolve to the same property name via `.replace()`. Function-scope keys are decoded once on first invocation and cached across calls. |
 | 14 | **Number Encoding** | `transforms/numberEncoding.ts` | 11 encoding strategies: shift+add, XOR identity, complement, division, nested shifts, double-NOT, modular, etc. Each instance uniquely generated. Skips property keys and switch case values. |
 | 15 | **Self-Integrity Verification** | `transforms/selfIntegrity.ts` | Injects 2-4 runtime checks: eval native-code verification, `Function.prototype.toString` integrity, timing anomaly detection, code structure validation. Anti-tamper responses: busy wait, throw, silent corruption. *[Paper 10]* |
@@ -182,7 +182,7 @@ src/
   types.ts              AST type definitions
   random.ts             Random Unicode name generation (6-16 chars, 16 script ranges)
   ast.ts                AST node factory functions
-  keywords.ts           Dynamic keyword discovery (globalThis + window package)
+  keywords.ts           Dynamic keyword discovery (globalThis + jsdom)
   globals.ts            Global state management (null-prototype maps)
   substitute.ts         Identifier substitution utilities
   declarations.d.ts     Module type declarations

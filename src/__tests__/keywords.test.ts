@@ -37,7 +37,7 @@ describe('isKeyword', () => {
     expect(isKeyword('process')).toBe(true);
   });
 
-  it('recognizes DOM globals from window package', () => {
+  it('recognizes DOM globals from jsdom', () => {
     expect(isKeyword('Document')).toBe(true);
     expect(isKeyword('Element')).toBe(true);
     expect(isKeyword('Event')).toBe(true);
@@ -70,7 +70,7 @@ describe('buildKeywords', () => {
     expect(kw).toContain('Array');
     expect(kw).toContain('Promise');
     expect(kw).toContain('Buffer');
-    // Browser (from window package)
+    // Browser (from jsdom)
     expect(kw).toContain('Document');
     expect(kw).toContain('HTMLElement');
     // Prototype methods

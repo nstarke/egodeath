@@ -1,6 +1,6 @@
 import * as recast from 'recast';
 
-const Window = require('window');
+const { JSDOM } = require('jsdom');
 
 /**
  * Dynamically detect all function properties on the console object
@@ -39,7 +39,7 @@ const NEVER_OBFUSCATE = new Set([
 
 /**
  * Dynamically build the global keywords list by introspecting:
- * 1. The `window` package (browser globals — DOM APIs, constructors)
+ * 1. jsdom (browser globals — DOM APIs, constructors)
  * 2. Node.js `globalThis` (built-in modules, constructors, functions)
  * 3. Prototype properties of all discovered constructors
  *
@@ -49,27 +49,31 @@ const NEVER_OBFUSCATE = new Set([
 export function buildKeywords(): string[] {
   const keywords = new Set<string>(NEVER_OBFUSCATE);
 
-  // --- Source 1: window package (browser-like globals) ---
+  // --- Source 1: jsdom (browser-like globals) ---
   try {
-    const win = new Window();
-    for (const name of Object.getOwnPropertyNames(win)) {
-      if (name.startsWith('_')) continue; // skip internal props
-      keywords.add(name);
-      try {
-        const val = win[name];
-        if (val && typeof val === 'function' && val.prototype) {
-          for (const prop of Object.getOwnPropertyNames(val.prototype)) {
-            keywords.add(prop);
+    const win = new JSDOM('').window;
+    try {
+      for (const name of Object.getOwnPropertyNames(win)) {
+        if (name.startsWith('_')) continue; // skip internal props
+        keywords.add(name);
+        try {
+          const val = win[name];
+          if (val && typeof val === 'function' && val.prototype) {
+            for (const prop of Object.getOwnPropertyNames(val.prototype)) {
+              keywords.add(prop);
+            }
           }
-        }
-        if (val && typeof val === 'object') {
-          for (const prop of Object.getOwnPropertyNames(val)) {
-            keywords.add(prop);
+          if (val && typeof val === 'object') {
+            for (const prop of Object.getOwnPropertyNames(val)) {
+              keywords.add(prop);
+            }
           }
-        }
-      } catch { /* some properties throw on access */ }
+        } catch { /* some properties throw on access */ }
+      }
+    } finally {
+      win.close();
     }
-  } catch { /* window package may fail in some environments */ }
+  } catch { /* jsdom may fail in some environments */ }
 
   // --- Source 2: Node.js globalThis ---
   try {
@@ -135,18 +139,22 @@ export function buildEncodableGlobals(): Set<string> {
     } catch { /* skip inaccessible */ }
   }
 
-  // Also add browser globals from the window package that are
+  // Also add browser globals from jsdom that are
   // commonly referenced in client-side code
   try {
-    const win = new Window();
-    for (const name of Object.getOwnPropertyNames(win)) {
-      if (name.startsWith('_')) continue;
-      try {
-        const val = win[name];
-        if (typeof val === 'function' || (typeof val === 'object' && val !== null)) {
-          globals.add(name);
-        }
-      } catch {}
+    const win = new JSDOM('').window;
+    try {
+      for (const name of Object.getOwnPropertyNames(win)) {
+        if (name.startsWith('_')) continue;
+        try {
+          const val = win[name];
+          if (typeof val === 'function' || (typeof val === 'object' && val !== null)) {
+            globals.add(name);
+          }
+        } catch {}
+      }
+    } finally {
+      win.close();
     }
   } catch {}
 
