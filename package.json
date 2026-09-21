@@ -28,7 +28,7 @@
     "@types/estraverse": "^5.1.7",
     "@types/estree": "^1.0.9",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.5.0",
+    "@types/node": "^26.6.1",
     "jest": "^30.5.2",
     "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
