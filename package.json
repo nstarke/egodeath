@@ -26,15 +26,15 @@
   },
   "devDependencies": {
     "@types/estraverse": "^5.1.7",
-    "@types/estree": "^1.0.8",
+    "@types/estree": "^1.0.9",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.0",
-    "jest": "^30.3.0",
-    "ts-jest": "^29.4.9",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
     "webcrack": "^2.16.0",
-    "webpack": "^5.105.4",
-    "webpack-cli": "^7.0.2"
+    "webpack": "^5.111.1",
+    "webpack-cli": "^7.2.3"
   }
 }
