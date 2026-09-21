@@ -217,6 +217,9 @@ tests/
 
 ## Testing
 
+CI builds and tests on Node.js 22 and 24. See [security automation](docs/security-automation.md)
+for CodeQL, dependency review, npm audit, and automated dependency updates.
+
 ```bash
 # Run all tests
 npm test
